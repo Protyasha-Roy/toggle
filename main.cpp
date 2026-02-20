@@ -297,15 +297,16 @@ void MoveSelectionZOrder(Canvas &canvas, bool forward) {
 }
 
 void DrawDashedLine(Vector2 start, Vector2 end, float width, Color color) {
-  float dashLen = 4.0f;
   float totalLen = Vector2Distance(start, end);
   if (totalLen < 1.0f)
     return;
   Vector2 dir = Vector2Normalize(Vector2Subtract(end, start));
-  for (float i = 0; i < totalLen; i += dashLen * 2) {
+  float dashLen = max(width * 2.0f, 6.0f);
+  float gapLen = max(width * 1.2f, 4.0f);
+  for (float i = 0.0f; i < totalLen; i += (dashLen + gapLen)) {
+    float endDist = min(i + dashLen, totalLen);
     Vector2 s = Vector2Add(start, Vector2Scale(dir, i));
-    Vector2 e =
-        Vector2Add(start, Vector2Scale(dir, min(i + dashLen, totalLen)));
+    Vector2 e = Vector2Add(start, Vector2Scale(dir, endDist));
     DrawLineEx(s, e, width, color);
   }
 }
@@ -323,16 +324,22 @@ void DrawArrowLine(Vector2 start, Vector2 end, float width, Color color) {
 }
 
 void DrawDashedRing(Vector2 center, float radius, float width, Color color) {
-  int segments = (int)(radius * 1.5f);
-  if (segments < 40)
-    segments = 40;
-  float step = (2 * PI) / segments;
-  for (int i = 0; i < segments; i += 2) {
-    Vector2 s = {center.x + cosf(i * step) * radius,
-                 center.y + sinf(i * step) * radius};
-    Vector2 e = {center.x + cosf((i + 1) * step) * radius,
-                 center.y + sinf((i + 1) * step) * radius};
-    DrawLineEx(s, e, width, color);
+  if (radius <= 0.5f)
+    return;
+
+  float circumference = 2.0f * PI * radius;
+  float dashArcLen = max(width * 2.0f, 6.0f);
+  float gapArcLen = max(width * 1.2f, 4.0f);
+  float dashDeg = (dashArcLen / circumference) * 360.0f;
+  float gapDeg = (gapArcLen / circumference) * 360.0f;
+
+  if (dashDeg <= 0.0f)
+    return;
+
+  for (float a = 0.0f; a < 360.0f; a += (dashDeg + gapDeg)) {
+    float aEnd = min(a + dashDeg, 360.0f);
+    DrawRing(center, radius - width * 0.5f, radius + width * 0.5f, a, aEnd, 24,
+             color);
   }
 }
 
