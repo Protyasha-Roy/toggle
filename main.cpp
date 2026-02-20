@@ -314,7 +314,10 @@ void DrawDashedLine(Vector2 start, Vector2 end, float width, Color color) {
 void DrawArrowLine(Vector2 start, Vector2 end, float width, Color color) {
   DrawLineEx(start, end, width, color);
   float angle = atan2f(end.y - start.y, end.x - start.x);
-  float headSize = 15.0f;
+  float headSize = max(15.0f, width * 3.0f);
+  float lineLen = Vector2Distance(start, end);
+  if (headSize > lineLen * 0.7f)
+    headSize = lineLen * 0.7f;
   Vector2 p1 = {end.x - headSize * cosf(angle - PI / 6),
                 end.y - headSize * sinf(angle - PI / 6)};
   Vector2 p2 = {end.x - headSize * cosf(angle + PI / 6),
@@ -365,12 +368,16 @@ void DrawElement(const Element &el, const Font &font, float textSize) {
   else if (el.type == DOTTEDRECT_MODE) {
     Rectangle r = {min(el.start.x, el.end.x), min(el.start.y, el.end.y),
                    abs(el.end.x - el.start.x), abs(el.end.y - el.start.y)};
-    DrawDashedLine({r.x, r.y}, {r.x + r.width, r.y}, el.strokeWidth, el.color);
-    DrawDashedLine({r.x + r.width, r.y}, {r.x + r.width, r.y + r.height},
+    float overlap = el.strokeWidth * 0.5f;
+    DrawDashedLine({r.x - overlap, r.y}, {r.x + r.width + overlap, r.y},
                    el.strokeWidth, el.color);
-    DrawDashedLine({r.x + r.width, r.y + r.height}, {r.x, r.y + r.height},
+    DrawDashedLine({r.x + r.width, r.y - overlap},
+                   {r.x + r.width, r.y + r.height + overlap}, el.strokeWidth,
+                   el.color);
+    DrawDashedLine({r.x + r.width + overlap, r.y + r.height},
+                   {r.x - overlap, r.y + r.height}, el.strokeWidth, el.color);
+    DrawDashedLine({r.x, r.y + r.height + overlap}, {r.x, r.y - overlap},
                    el.strokeWidth, el.color);
-    DrawDashedLine({r.x, r.y + r.height}, {r.x, r.y}, el.strokeWidth, el.color);
   } else if (el.type == PEN_MODE) {
     int pointCount = (int)el.path.size();
 
