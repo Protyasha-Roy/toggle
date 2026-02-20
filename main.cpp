@@ -28,6 +28,7 @@ struct Element {
   Color color;
   vector<Vector2> path;
   int originalIndex = -1;
+  int uniqueID = -1;
   vector<Element> children;
 
   Rectangle GetBounds() const {
@@ -81,6 +82,7 @@ struct Canvas {
   Color modeColor = MAROON;
   vector<Element> elements;
   vector<vector<Element>> undoStack;
+  vector<Element> clipboard;
   vector<vector<Element>> redoStack;
   vector<Vector2> currentPath;
   bool showTags = false;
@@ -91,11 +93,35 @@ struct Canvas {
   bool hasMoved = false;
   bool isBoxSelecting = false;
   int lastKey = 0;
+  int nextElementId = 0;
 };
 
 void SaveBackup(Canvas &canvas) {
   canvas.undoStack.push_back(canvas.elements);
   canvas.redoStack.clear();
+}
+
+// helper: ensure element (and its children if group) has a non-negative
+// uniqueID
+void EnsureUniqueIDRecursive(Element &el, Canvas &canvas) {
+  if (el.uniqueID < 0) {
+    el.uniqueID = canvas.nextElementId++;
+  }
+  if (el.type == GROUP_MODE) {
+    for (auto &c : el.children) {
+      if (c.uniqueID < 0) {
+        EnsureUniqueIDRecursive(c, canvas);
+      }
+    }
+  }
+}
+
+int FindElementIndexByID(const Canvas &canvas, int id) {
+  for (int i = 0; i < (int)canvas.elements.size(); ++i) {
+    if (canvas.elements[i].uniqueID == id)
+      return i;
+  }
+  return -1;
 }
 
 void DrawDashedLine(Vector2 start, Vector2 end, float width, Color color) {
@@ -199,24 +225,41 @@ void MoveElement(Element &el, Vector2 delta) {
 void RestoreZOrder(Canvas &canvas) {
   if (canvas.selectedIndices.empty())
     return;
-  vector<Element> selectedElements;
-  for (int idx : canvas.selectedIndices)
-    selectedElements.push_back(canvas.elements[idx]);
+
+  struct PendingRestore {
+    Element el;
+    int target;
+  };
+  vector<PendingRestore> toRestore;
+
+  // Process selected indices from top to bottom so erase doesn't shift
+  // yet-to-be-processed indices
   sort(canvas.selectedIndices.begin(), canvas.selectedIndices.end(),
        greater<int>());
-  for (int idx : canvas.selectedIndices)
-    canvas.elements.erase(canvas.elements.begin() + idx);
-  for (auto &el : selectedElements) {
-    int target = el.originalIndex;
-    // Ensure target is never negative
-    if (target < 0)
-      target = 0;
 
-    if (target >= (int)canvas.elements.size())
-      canvas.elements.push_back(el);
-    else
-      canvas.elements.insert(canvas.elements.begin() + target, el);
+  for (int idx : canvas.selectedIndices) {
+    if (idx >= 0 && idx < (int)canvas.elements.size() &&
+        canvas.elements[idx].originalIndex != -1) {
+      toRestore.push_back(
+          {canvas.elements[idx], canvas.elements[idx].originalIndex});
+      canvas.elements.erase(canvas.elements.begin() + idx);
+    }
   }
+
+  sort(toRestore.begin(), toRestore.end(),
+       [](const PendingRestore &a, const PendingRestore &b) {
+         return a.target < b.target;
+       });
+
+  for (auto &item : toRestore) {
+    item.el.originalIndex = -1;
+    if (item.target >= (int)canvas.elements.size()) {
+      canvas.elements.push_back(item.el);
+    } else {
+      canvas.elements.insert(canvas.elements.begin() + item.target, item.el);
+    }
+  }
+
   canvas.selectedIndices.clear();
 }
 
@@ -225,13 +268,62 @@ int main() {
   const int screenHeight = 800;
   Canvas canvas;
   SetConfigFlags(FLAG_MSAA_4X_HINT);
-  InitWindow(screenWidth, screenHeight, "TOGGLE");
+  InitWindow(screenWidth, screenHeight, "Toggle : no more toggling");
   SetTargetFPS(60);
   canvas.font = LoadFont("IosevkaNerdFontMono-Regular.ttf");
   SetTextureFilter(canvas.font.texture, TEXTURE_FILTER_BILINEAR);
 
   while (!WindowShouldClose()) {
     int key = GetKeyPressed();
+
+    // --- key handling: NOTE: P is handled in a single branch to avoid both
+    // paste and pen activation on Shift+P
+    if (key == KEY_Y) {
+      if (!canvas.selectedIndices.empty()) {
+        canvas.clipboard.clear();
+        for (int idx : canvas.selectedIndices) {
+          if (idx >= 0 && idx < (int)canvas.elements.size())
+            canvas.clipboard.push_back(canvas.elements[idx]);
+        }
+      }
+    }
+
+    if (key == KEY_P) {
+      // SHIFT+P => Paste (only if clipboard not empty)
+      if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+        if (!canvas.clipboard.empty()) {
+          SaveBackup(canvas);
+          RestoreZOrder(canvas);
+          canvas.selectedIndices.clear();
+
+          Vector2 pasteOffset = {20, 20};
+          for (const auto &item : canvas.clipboard) {
+            Element cloned = item;
+
+            // Assign a fresh ID to the copy (and ensure children have IDs)
+            cloned.uniqueID = canvas.nextElementId++;
+            if (cloned.type == GROUP_MODE) {
+              for (auto &c : cloned.children)
+                EnsureUniqueIDRecursive(c, canvas);
+            }
+
+            cloned.originalIndex = -1;
+
+            MoveElement(cloned, pasteOffset);
+            canvas.elements.push_back(cloned);
+            canvas.selectedIndices.push_back((int)canvas.elements.size() - 1);
+          }
+        }
+      } else {
+        // plain 'p' => PEN mode
+        canvas.mode = PEN_MODE;
+        canvas.modeText = "PEN";
+        canvas.modeColor = BLACK;
+        canvas.isTypingNumber = false;
+      }
+    }
+
+    // Other mode keys
     if (key == KEY_S) {
       canvas.mode = SELECTION_MODE;
       canvas.modeText = "SELECTION";
@@ -274,49 +366,62 @@ int main() {
       canvas.modeColor = RED;
       canvas.isTypingNumber = false;
     }
-    if (key == KEY_P) {
-      canvas.mode = PEN_MODE;
-      canvas.modeText = "PEN";
-      canvas.modeColor = BLACK;
-      canvas.isTypingNumber = false;
-    }
     if (key == KEY_E) {
       canvas.mode = ERASER_MODE;
       canvas.modeText = "ERASER";
       canvas.modeColor = ORANGE;
       canvas.isTypingNumber = false;
     }
+
     if (key == KEY_G) {
       if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+        // Ungroup selected group(s)
         if (!canvas.selectedIndices.empty()) {
           SaveBackup(canvas);
           vector<int> sorted = canvas.selectedIndices;
           sort(sorted.begin(), sorted.end(), greater<int>());
           for (int idx : sorted) {
-            if (canvas.elements[idx].type == GROUP_MODE) {
+            if (idx >= 0 && idx < (int)canvas.elements.size() &&
+                canvas.elements[idx].type == GROUP_MODE) {
               Element g = canvas.elements[idx];
               canvas.elements.erase(canvas.elements.begin() + idx);
-              for (auto &child : g.children)
+              // push children back to canvas (children already have IDs)
+              for (auto &child : g.children) {
                 canvas.elements.push_back(child);
+              }
             }
           }
           canvas.selectedIndices.clear();
         }
       } else if (canvas.selectedIndices.size() > 1) {
+        // Group selected elements into a single group
         SaveBackup(canvas);
-        Element group = {GROUP_MODE};
+        Element group;
+        group.type = GROUP_MODE;
+        group.strokeWidth = canvas.strokeWidth;
+        group.color = canvas.modeColor;
+        group.uniqueID =
+            canvas.nextElementId++; // assign ID to the group itself
+
         vector<int> sorted = canvas.selectedIndices;
         sort(sorted.begin(), sorted.end(), greater<int>());
         for (int idx : sorted) {
-          group.children.push_back(canvas.elements[idx]);
-          canvas.elements.erase(canvas.elements.begin() + idx);
+          if (idx >= 0 && idx < (int)canvas.elements.size()) {
+            group.children.push_back(canvas.elements[idx]);
+            canvas.elements.erase(canvas.elements.begin() + idx);
+          }
         }
         Rectangle gb = group.GetBounds();
         group.start = {gb.x, gb.y};
+        // Ensure children have valid IDs
+        for (auto &c : group.children)
+          EnsureUniqueIDRecursive(c, canvas);
+
         canvas.elements.push_back(group);
         canvas.selectedIndices = {(int)canvas.elements.size() - 1};
       }
     }
+
     if (key == KEY_F)
       canvas.showTags = !canvas.showTags;
     if (key != 0)
@@ -337,6 +442,7 @@ int main() {
       }
     }
 
+    // SELECTION MODE specific behavior
     if (canvas.mode == SELECTION_MODE) {
       if (key >= KEY_ZERO && key <= KEY_NINE) {
         double currentTime = GetTime();
@@ -349,11 +455,16 @@ int main() {
           canvas.inputNumber = (canvas.inputNumber * 10 + digit);
         }
         canvas.lastInputTime = currentTime;
+
+        // We use uniqueID for tagging and selection. Find element with that
+        // uniqueID.
         RestoreZOrder(canvas);
-        if (canvas.inputNumber < (int)canvas.elements.size()) {
-          Element selected = canvas.elements[canvas.inputNumber];
-          selected.originalIndex = canvas.inputNumber;
-          canvas.elements.erase(canvas.elements.begin() + canvas.inputNumber);
+        int foundIdx = FindElementIndexByID(canvas, canvas.inputNumber);
+        if (foundIdx != -1) {
+          SaveBackup(canvas);
+          Element selected = canvas.elements[foundIdx];
+          selected.originalIndex = foundIdx;
+          canvas.elements.erase(canvas.elements.begin() + foundIdx);
           canvas.elements.push_back(selected);
           canvas.selectedIndices = {(int)canvas.elements.size() - 1};
         }
@@ -363,22 +474,29 @@ int main() {
           !canvas.elements.empty()) {
         int currentOrig = -1;
         if (!canvas.selectedIndices.empty()) {
-          currentOrig =
-              canvas.elements[canvas.selectedIndices[0]].originalIndex;
+          int selIdx = canvas.selectedIndices[0];
+          if (selIdx >= 0 && selIdx < (int)canvas.elements.size())
+            currentOrig = canvas.elements[selIdx].originalIndex;
           if (currentOrig == -1)
             currentOrig = canvas.selectedIndices[0];
         }
         RestoreZOrder(canvas);
-        int nextIdx = (IsKeyPressed(KEY_J))
-                          ? (currentOrig + 1) % (int)canvas.elements.size()
-                          : (currentOrig <= 0 ? (int)canvas.elements.size() - 1
-                                              : currentOrig - 1);
-        Element selected = canvas.elements[nextIdx];
-        selected.originalIndex = nextIdx;
-        canvas.elements.erase(canvas.elements.begin() + nextIdx);
-        canvas.elements.push_back(selected);
-        canvas.selectedIndices = {(int)canvas.elements.size() - 1};
-        canvas.isTypingNumber = false;
+        int nextIdx;
+        if (IsKeyPressed(KEY_J)) {
+          nextIdx = (currentOrig + 1) % (int)canvas.elements.size();
+        } else {
+          nextIdx = (currentOrig <= 0 ? (int)canvas.elements.size() - 1
+                                      : currentOrig - 1);
+        }
+        if (!canvas.elements.empty()) {
+          SaveBackup(canvas);
+          Element selected = canvas.elements[nextIdx];
+          selected.originalIndex = nextIdx;
+          canvas.elements.erase(canvas.elements.begin() + nextIdx);
+          canvas.elements.push_back(selected);
+          canvas.selectedIndices = {(int)canvas.elements.size() - 1};
+          canvas.isTypingNumber = false;
+        }
       }
 
       if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
@@ -444,7 +562,8 @@ int main() {
                    (delta.x != 0 || delta.y != 0)) {
           canvas.hasMoved = true;
           for (int idx : canvas.selectedIndices) {
-            MoveElement(canvas.elements[idx], delta);
+            if (idx >= 0 && idx < (int)canvas.elements.size())
+              MoveElement(canvas.elements[idx], delta);
           }
         }
       }
@@ -469,6 +588,7 @@ int main() {
         }
       }
     } else {
+      // Drawing modes (line, rect, circle, pen,...)
       if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         canvas.startPoint = GetMousePosition();
         canvas.isDragging = true;
@@ -489,8 +609,17 @@ int main() {
         if (canvas.mode == PEN_MODE ||
             Vector2Distance(canvas.startPoint, canvas.currentMouse) > 1.0f) {
           SaveBackup(canvas);
-          Element newEl = {canvas.mode, canvas.startPoint, canvas.currentMouse,
-                           canvas.strokeWidth, canvas.modeColor};
+          Element newEl;
+          newEl.type = canvas.mode;
+          newEl.start = canvas.startPoint;
+          newEl.end = canvas.currentMouse;
+          newEl.strokeWidth = canvas.strokeWidth;
+          newEl.color = canvas.modeColor;
+          newEl.originalIndex = -1;
+
+          // Assign the permanent ID and increment the counter
+          newEl.uniqueID = canvas.nextElementId++;
+
           if (canvas.mode == PEN_MODE)
             newEl.path = canvas.currentPath;
           canvas.elements.push_back(newEl);
@@ -498,8 +627,10 @@ int main() {
       }
     }
 
+    // --- Drawing
     BeginDrawing();
     ClearBackground(WHITE);
+
     for (size_t i = 0; i < canvas.elements.size(); i++) {
       DrawElement(canvas.elements[i]);
       bool isSelected = false;
@@ -512,17 +643,25 @@ int main() {
                              MAGENTA);
       }
       if (canvas.showTags) {
-        int displayIndex = (canvas.elements[i].originalIndex != -1)
-                               ? canvas.elements[i].originalIndex
-                               : (int)i;
+        // Stable displayed ID: uniqueID (always >= 0)
+        int displayId = canvas.elements[i].uniqueID;
+        if (displayId < 0) {
+          // If somehow missing, ensure we assign one (defensive)
+          Element &mut = const_cast<Element &>(canvas.elements[i]);
+          EnsureUniqueIDRecursive(mut, canvas);
+          displayId = mut.uniqueID;
+        }
+
+        // draw tag near element start
         DrawRectangle(canvas.elements[i].start.x,
                       canvas.elements[i].start.y - 20, 20, 20, YELLOW);
         DrawRectangleLines(canvas.elements[i].start.x,
                            canvas.elements[i].start.y - 20, 20, 20, BLACK);
-        DrawText(TextFormat("%d", displayIndex), canvas.elements[i].start.x + 5,
+        DrawText(TextFormat("%d", displayId), canvas.elements[i].start.x + 5,
                  canvas.elements[i].start.y - 15, 10, BLACK);
       }
     }
+
     if (canvas.isDragging) {
       if (canvas.mode == SELECTION_MODE && canvas.isBoxSelecting) {
         Rectangle box = {min(canvas.startPoint.x, canvas.currentMouse.x),
@@ -533,8 +672,12 @@ int main() {
         DrawRectangleLinesEx(box, 1, BLUE);
       } else if (canvas.mode != SELECTION_MODE && canvas.mode != ERASER_MODE) {
         Vector2 m = GetMousePosition();
-        Element preview = {canvas.mode, canvas.startPoint, m,
-                           canvas.strokeWidth, Fade(canvas.modeColor, 0.5f)};
+        Element preview;
+        preview.type = canvas.mode;
+        preview.start = canvas.startPoint;
+        preview.end = m;
+        preview.strokeWidth = canvas.strokeWidth;
+        preview.color = Fade(canvas.modeColor, 0.5f);
         if (canvas.mode == PEN_MODE)
           preview.path = canvas.currentPath;
         DrawElement(preview);
