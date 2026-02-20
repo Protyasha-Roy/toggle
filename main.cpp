@@ -2,6 +2,7 @@
 #include "raymath.h"
 #include <algorithm>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 using namespace std;
@@ -100,6 +101,7 @@ struct Canvas {
   double lastInputTime = 0.0;
   bool hasMoved = false;
   bool isBoxSelecting = false;
+  bool boxSelectActive = false;
   int lastKey = 0;
   int nextElementId = 0;
   bool isTextEditing = false;
@@ -142,6 +144,30 @@ int FindElementIndexByID(const Canvas &canvas, int id) {
       return i;
   }
   return -1;
+}
+
+void NormalizeElementIDs(Element &el, unordered_set<int> &used, int &nextId) {
+  if (el.uniqueID < 0 || used.count(el.uniqueID) > 0) {
+    while (used.count(nextId) > 0)
+      nextId++;
+    el.uniqueID = nextId++;
+  } else {
+    used.insert(el.uniqueID);
+    if (el.uniqueID >= nextId)
+      nextId = el.uniqueID + 1;
+  }
+
+  used.insert(el.uniqueID);
+  for (auto &child : el.children)
+    NormalizeElementIDs(child, used, nextId);
+}
+
+void NormalizeCanvasIDs(Canvas &canvas) {
+  unordered_set<int> used;
+  int nextId = 0;
+  for (auto &el : canvas.elements)
+    NormalizeElementIDs(el, used, nextId);
+  canvas.nextElementId = nextId;
 }
 
 bool IsPointOnElement(const Element &el, Vector2 p, float tolerance) {
@@ -195,6 +221,20 @@ bool IsPointOnElement(const Element &el, Vector2 p, float tolerance) {
   }
   if (el.type == TEXT_MODE) {
     return CheckCollisionPointRec(p, el.GetBounds());
+  }
+  return false;
+}
+
+bool IsPointOnSelectedBounds(const Canvas &canvas, Vector2 p) {
+  for (int i = (int)canvas.selectedIndices.size() - 1; i >= 0; --i) {
+    int idx = canvas.selectedIndices[i];
+    if (idx >= 0 && idx < (int)canvas.elements.size()) {
+      Rectangle b = canvas.elements[idx].GetBounds();
+      Rectangle expanded = {b.x - 5.0f, b.y - 5.0f, b.width + 10.0f,
+                            b.height + 10.0f};
+      if (CheckCollisionPointRec(p, expanded))
+        return true;
+    }
   }
   return false;
 }
@@ -428,6 +468,7 @@ int main() {
       canvas.editingIndex = -1;
       canvas.textEditBackedUp = false;
     }
+    NormalizeCanvasIDs(canvas);
     if (canvas.isTextEditing)
       key = 0;
 
@@ -643,6 +684,12 @@ int main() {
       }
     }
 
+    if (!canvas.isTextEditing && canvas.mode == SELECTION_MODE && escPressed &&
+        !canvas.selectedIndices.empty()) {
+      RestoreZOrder(canvas);
+      canvas.selectedIndices.clear();
+    }
+
     // SELECTION MODE specific behavior
     if (canvas.mode == MOVE_MODE) {
       if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
@@ -729,15 +776,34 @@ int main() {
         canvas.isDragging = true;
         bool hit = false;
         int hitIndex = -1;
-        float hitTol = 4.0f / canvas.camera.zoom;
-        for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
-          Rectangle tagHit = {canvas.elements[i].start.x,
-                              canvas.elements[i].start.y - 20, 20, 20};
-          if (IsPointOnElement(canvas.elements[i], canvas.startPoint, hitTol) ||
-              CheckCollisionPointRec(canvas.startPoint, tagHit)) {
-            hitIndex = i;
-            hit = true;
-            break;
+        bool hitSelectedBounds =
+            !canvas.selectedIndices.empty() &&
+            IsPointOnSelectedBounds(canvas, canvas.startPoint);
+        float hitTol = 2.0f / canvas.camera.zoom;
+        if (hitSelectedBounds) {
+          for (int i = (int)canvas.selectedIndices.size() - 1; i >= 0; --i) {
+            int idx = canvas.selectedIndices[i];
+            if (idx >= 0 && idx < (int)canvas.elements.size()) {
+              Rectangle b = canvas.elements[idx].GetBounds();
+              Rectangle expanded = {b.x - 5.0f, b.y - 5.0f, b.width + 10.0f,
+                                    b.height + 10.0f};
+              if (CheckCollisionPointRec(canvas.startPoint, expanded)) {
+                hitIndex = idx;
+                hit = true;
+                break;
+              }
+            }
+          }
+        } else {
+          for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
+            Rectangle tagHit = {canvas.elements[i].start.x,
+                                canvas.elements[i].start.y - 20, 20, 20};
+            if (IsPointOnElement(canvas.elements[i], canvas.startPoint, hitTol) ||
+                CheckCollisionPointRec(canvas.startPoint, tagHit)) {
+              hitIndex = i;
+              hit = true;
+              break;
+            }
           }
         }
         if (hit) {
@@ -756,9 +822,12 @@ int main() {
           } else
             SaveBackup(canvas);
           canvas.isBoxSelecting = false;
+          canvas.boxSelectActive = false;
         } else {
           RestoreZOrder(canvas);
+          canvas.selectedIndices.clear();
           canvas.isBoxSelecting = true;
+          canvas.boxSelectActive = false;
         }
         canvas.hasMoved = false;
       }
@@ -768,18 +837,26 @@ int main() {
         canvas.currentMouse = GetScreenToWorld2D(GetMousePosition(), canvas.camera);
         Vector2 delta = Vector2Subtract(canvas.currentMouse, prevMouse);
         if (canvas.isBoxSelecting) {
-          canvas.selectedIndices.clear();
-          Rectangle selectionBox = {
-              min(canvas.startPoint.x, canvas.currentMouse.x),
-              min(canvas.startPoint.y, canvas.currentMouse.y),
-              abs(canvas.currentMouse.x - canvas.startPoint.x),
-              abs(canvas.currentMouse.y - canvas.startPoint.y)};
-          for (int i = 0; i < (int)canvas.elements.size(); i++) {
-            if (CheckCollisionRecs(selectionBox,
-                                   canvas.elements[i].GetBounds())) {
-              canvas.selectedIndices.push_back(i);
-              if (canvas.elements[i].originalIndex == -1)
-                canvas.elements[i].originalIndex = i;
+          float activationDist = 6.0f / canvas.camera.zoom;
+          if (!canvas.boxSelectActive &&
+              Vector2Distance(canvas.startPoint, canvas.currentMouse) >=
+                  activationDist) {
+            canvas.boxSelectActive = true;
+          }
+          if (canvas.boxSelectActive) {
+            canvas.selectedIndices.clear();
+            Rectangle selectionBox = {
+                min(canvas.startPoint.x, canvas.currentMouse.x),
+                min(canvas.startPoint.y, canvas.currentMouse.y),
+                abs(canvas.currentMouse.x - canvas.startPoint.x),
+                abs(canvas.currentMouse.y - canvas.startPoint.y)};
+            for (int i = 0; i < (int)canvas.elements.size(); i++) {
+              if (CheckCollisionRecs(selectionBox,
+                                     canvas.elements[i].GetBounds())) {
+                canvas.selectedIndices.push_back(i);
+                if (canvas.elements[i].originalIndex == -1)
+                  canvas.elements[i].originalIndex = i;
+              }
             }
           }
         } else if (!canvas.selectedIndices.empty() &&
@@ -797,6 +874,7 @@ int main() {
           canvas.undoStack.pop_back();
         canvas.isDragging = false;
         canvas.isBoxSelecting = false;
+        canvas.boxSelectActive = false;
       }
     } else if (canvas.mode == ERASER_MODE) {
       if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
