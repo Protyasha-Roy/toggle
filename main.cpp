@@ -6,311 +6,272 @@
 using namespace std;
 
 enum Mode {
-  SELECTION_MODE,
-  LINE_MODE,
-  DOTTEDLINE_MODE,
-  ARROWLINE_MODE,
-  CIRCLE_MODE,
-  DOTTEDCIRCLE_MODE,
-  RECTANGLE_MODE,
-  DOTTEDRECT_MODE,
-  TEXT_MODE,
-  ERASER_MODE,
-  PEN_MODE,
+    SELECTION_MODE,
+    LINE_MODE,
+    DOTTEDLINE_MODE,
+    ARROWLINE_MODE,
+    CIRCLE_MODE,
+    DOTTEDCIRCLE_MODE,
+    RECTANGLE_MODE,
+    DOTTEDRECT_MODE,
+    TEXT_MODE,
+    ERASER_MODE,
+    PEN_MODE,
 };
 
 struct Element {
-  Mode type;
-  Vector2 start;
-  Vector2 end;
-  float strokeWidth;
-  Color color;
-  vector<Vector2> path;
+    Mode type;
+    Vector2 start;
+    Vector2 end;
+    float strokeWidth;
+    Color color;
+    vector<Vector2> path;
+
+    Rectangle GetBounds() const {
+        float minX, minY, maxX, maxY;
+        if (type == PEN_MODE && !path.empty()) {
+            minX = maxX = path[0].x; minY = maxY = path[0].y;
+            for (auto &p : path) {
+                minX = min(minX, p.x); minY = min(minY, p.y);
+                maxX = max(maxX, p.x); maxY = max(maxY, p.y);
+            }
+        } else if (type == CIRCLE_MODE) {
+            float r = Vector2Distance(start, end);
+            minX = start.x - r; minY = start.y - r;
+            maxX = start.x + r; maxY = start.y + r;
+        } else {
+            minX = min(start.x, end.x); minY = min(start.y, end.y);
+            maxX = max(start.x, end.x); maxY = max(start.y, end.y);
+        }
+        return {minX, minY, maxX - minX, maxY - minY};
+    }
 };
 
 struct Canvas {
-  Mode mode = SELECTION_MODE;
-  float strokeWidth = 2.0f;
-  Vector2 startPoint = {0};
-  Vector2 currentMouse = {0};
-  bool isDragging = false;
-  Font font;
-  const char *modeText = "SELECTION";
-  Color modeColor = MAROON;
-  vector<Element> elements;
-  vector<Vector2> currentPath;
-  bool showTags = false;
-  int selectedIndex = -1;
-  bool isTypingNumber = false;
-  int inputNumber = 0;
+    Mode mode = SELECTION_MODE;
+    float strokeWidth = 2.0f;
+    Vector2 startPoint = {0};
+    Vector2 currentMouse = {0};
+    bool isDragging = false;
+    Font font;
+    const char *modeText = "SELECTION";
+    Color modeColor = MAROON;
+    vector<Element> elements;
+    vector<vector<Element>> undoStack;
+    vector<vector<Element>> redoStack;
+    vector<Vector2> currentPath;
+    bool showTags = false;
+    vector<int> selectedIndices;
+    bool isTypingNumber = false;
+    int inputNumber = 0;
+    bool hasMoved = false;
+    bool isBoxSelecting = false;
 };
 
+void SaveBackup(Canvas &canvas) {
+    canvas.undoStack.push_back(canvas.elements);
+    canvas.redoStack.clear();
+}
+
 int main() {
-  const int screenWidth = 1000;
-  const int screenHeight = 800;
+    const int screenWidth = 1000;
+    const int screenHeight = 800;
+    Canvas canvas;
 
-  Canvas canvas;
+    SetConfigFlags(FLAG_MSAA_4X_HINT);
+    InitWindow(screenWidth, screenHeight, "TOGGLE");
+    SetTargetFPS(60);
 
-  SetConfigFlags(FLAG_MSAA_4X_HINT);
-  InitWindow(screenWidth, screenHeight, "TOGGLE");
-  SetTargetFPS(60);
+    canvas.font = LoadFont("IosevkaNerdFontMono-Regular.ttf");
+    SetTextureFilter(canvas.font.texture, TEXTURE_FILTER_BILINEAR);
 
-  canvas.font = LoadFont("IosevkaNerdFontMono-Regular.ttf");
-  SetTextureFilter(canvas.font.texture, TEXTURE_FILTER_BILINEAR);
+    while (!WindowShouldClose()) {
+        if (IsKeyPressed(KEY_S)) { canvas.mode = SELECTION_MODE; canvas.modeText = "SELECTION"; canvas.modeColor = MAROON; }
+        if (IsKeyPressed(KEY_L)) { canvas.mode = LINE_MODE; canvas.modeText = "LINE"; canvas.modeColor = BLUE; }
+        if (IsKeyPressed(KEY_C)) { canvas.mode = CIRCLE_MODE; canvas.modeText = "CIRCLE"; canvas.modeColor = DARKGREEN; }
+        if (IsKeyPressed(KEY_R)) { canvas.mode = RECTANGLE_MODE; canvas.modeText = "RECTANGLE"; canvas.modeColor = RED; }
+        if (IsKeyPressed(KEY_P)) { canvas.mode = PEN_MODE; canvas.modeText = "PEN"; canvas.modeColor = BLACK; }
+        if (IsKeyPressed(KEY_F)) canvas.showTags = !canvas.showTags;
 
-  while (!WindowShouldClose()) {
-    // Update
-
-    // Mode Switching
-    if (IsKeyPressed(KEY_S)) {
-      canvas.mode = SELECTION_MODE;
-      canvas.modeText = "SELECTION";
-      canvas.modeColor = MAROON;
-    }
-    if (IsKeyPressed(KEY_L)) {
-      canvas.mode = LINE_MODE;
-      canvas.modeText = "LINE";
-      canvas.modeColor = BLUE;
-    }
-    if (IsKeyPressed(KEY_C)) {
-      canvas.mode = CIRCLE_MODE;
-      canvas.modeText = "CIRCLE";
-      canvas.modeColor = DARKGREEN;
-    }
-    if (IsKeyPressed(KEY_T)) {
-      canvas.mode = TEXT_MODE;
-      canvas.modeText = "TEXT";
-      canvas.modeColor = PURPLE;
-    }
-    if (IsKeyPressed(KEY_R)) {
-      canvas.mode = RECTANGLE_MODE;
-      canvas.modeText = "RECTANGLE";
-      canvas.modeColor = RED;
-    }
-    if (IsKeyPressed(KEY_P)) {
-      canvas.mode = PEN_MODE;
-      canvas.modeText = "PEN";
-      canvas.modeColor = BLACK;
-    }
-    if (IsKeyPressed(KEY_F))
-      canvas.showTags = !canvas.showTags;
-
-    if (canvas.mode == SELECTION_MODE) {
-      // Keyboard Selection
-      int key = GetKeyPressed();
-      if (key >= KEY_ZERO && key <= KEY_NINE) {
-        int digit = key - KEY_ZERO;
-        if (!canvas.isTypingNumber) {
-          canvas.inputNumber = digit;
-          canvas.isTypingNumber = true;
-        } else {
-          int potential = canvas.inputNumber * 10 + digit;
-          canvas.inputNumber =
-              (potential < (int)canvas.elements.size()) ? potential : digit;
-        }
-        if (canvas.inputNumber < (int)canvas.elements.size())
-          canvas.selectedIndex = canvas.inputNumber;
-      }
-
-      if (IsKeyPressed(KEY_J) && !canvas.elements.empty()) {
-        canvas.isTypingNumber = false;
-        canvas.selectedIndex =
-            (canvas.selectedIndex + 1) % canvas.elements.size();
-      }
-      if (IsKeyPressed(KEY_K) && !canvas.elements.empty()) {
-        canvas.isTypingNumber = false;
-        canvas.selectedIndex = (canvas.selectedIndex <= 0)
-                                   ? (int)canvas.elements.size() - 1
-                                   : canvas.selectedIndex - 1;
-      }
-
-      // Mouse Selection
-      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        Vector2 mousePos = GetMousePosition();
-        canvas.selectedIndex = -1;
-        for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
-          Element &element = canvas.elements[i];
-          bool isHit = false;
-
-          if (element.type == CIRCLE_MODE) {
-            float radius = Vector2Distance(element.start, element.end);
-            if (CheckCollisionPointCircle(mousePos, element.start, radius))
-              isHit = true;
-          } else if (element.type == PEN_MODE) {
-            float minX = element.start.x, minY = element.start.y,
-                  maxX = element.start.x, maxY = element.start.y;
-            for (auto &p : element.path) {
-              minX = min(minX, p.x);
-              minY = min(minY, p.y);
-              maxX = max(maxX, p.x);
-              maxY = max(maxY, p.y);
+        if (IsKeyPressed(KEY_U)) {
+            if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+                if (!canvas.redoStack.empty()) {
+                    canvas.undoStack.push_back(canvas.elements);
+                    canvas.elements = canvas.redoStack.back();
+                    canvas.redoStack.pop_back();
+                }
+            } else if (!canvas.undoStack.empty()) {
+                canvas.redoStack.push_back(canvas.elements);
+                canvas.elements = canvas.undoStack.back();
+                canvas.undoStack.pop_back();
+                canvas.selectedIndices.clear();
             }
-            if (CheckCollisionPointRec(mousePos, {minX - 10, minY - 10,
-                                                  (maxX - minX) + 20,
-                                                  (maxY - minY) + 20}))
-              isHit = true;
-          } else {
-            float minX = min(element.start.x, element.end.x);
-            float minY = min(element.start.y, element.end.y);
-            float maxX = max(element.start.x, element.end.x);
-            float maxY = max(element.start.y, element.end.y);
-            if (CheckCollisionPointRec(mousePos, {minX - 10, minY - 10,
-                                                  (maxX - minX) + 20,
-                                                  (maxY - minY) + 20}))
-              isHit = true;
-          }
-
-          if (isHit) {
-            canvas.selectedIndex = i;
-            canvas.isDragging = true;
-            break;
-          }
         }
-      }
 
-      // Dragging Logic
-      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && canvas.isDragging &&
-          canvas.selectedIndex != -1) {
-        Vector2 delta = GetMouseDelta();
-        Element &selectedElement = canvas.elements[canvas.selectedIndex];
-        selectedElement.start = Vector2Add(selectedElement.start, delta);
-        selectedElement.end = Vector2Add(selectedElement.end, delta);
-        for (auto &p : selectedElement.path)
-          p = Vector2Add(p, delta);
-      }
-      if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON))
-        canvas.isDragging = false;
+        if (canvas.mode == SELECTION_MODE) {
+            int key = GetKeyPressed();
+            if (key >= KEY_ZERO && key <= KEY_NINE) {
+                int digit = key - KEY_ZERO;
+                if (!canvas.isTypingNumber) { canvas.inputNumber = digit; canvas.isTypingNumber = true; }
+                else { canvas.inputNumber = (canvas.inputNumber * 10 + digit) % (int)canvas.elements.size(); }
+                canvas.selectedIndices = {canvas.inputNumber};
+            }
 
-    } else {
-      // Drawing logic (Non-selection modes)
-      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        canvas.startPoint = GetMousePosition();
-        canvas.isDragging = true;
-        if (canvas.mode == PEN_MODE) {
-          canvas.currentPath.clear();
-          canvas.currentPath.push_back(canvas.startPoint);
-        }
-      }
-      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
-        canvas.currentMouse = GetMousePosition();
-        if (canvas.mode == PEN_MODE) {
-          if (Vector2Distance(canvas.currentPath.back(), canvas.currentMouse) >
-              2.0f) {
-            canvas.currentPath.push_back(canvas.currentMouse);
-          }
-        }
-      }
-      if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
-        canvas.isDragging = false;
+            if (IsKeyPressed(KEY_J) && !canvas.elements.empty()) {
+                canvas.isTypingNumber = false;
+                int current = canvas.selectedIndices.empty() ? -1 : canvas.selectedIndices[0];
+                int next = (current + 1) % (int)canvas.elements.size();
+                canvas.selectedIndices = {next};
+            }
+            if (IsKeyPressed(KEY_K) && !canvas.elements.empty()) {
+                canvas.isTypingNumber = false;
+                int current = canvas.selectedIndices.empty() ? 0 : canvas.selectedIndices[0];
+                int prev = (current <= 0) ? (int)canvas.elements.size() - 1 : current - 1;
+                canvas.selectedIndices = {prev};
+            }
 
-        //  Prevent zero-size ghost elements
-        float dist = Vector2Distance(canvas.startPoint, canvas.currentMouse);
-        if (canvas.mode == PEN_MODE || dist > 1.0f) {
-          Element newElement = {canvas.mode, canvas.startPoint,
-                                canvas.currentMouse, canvas.strokeWidth,
-                                canvas.modeColor};
-          if (canvas.mode == PEN_MODE)
-            newElement.path = canvas.currentPath;
-          canvas.elements.push_back(newElement);
-        }
-      }
-    }
+            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+                canvas.startPoint = GetMousePosition();
+                canvas.isDragging = true;
+                bool hitAnything = false;
 
-    // Drawing
-    BeginDrawing();
-    ClearBackground(WHITE);
+                for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
+                    Rectangle b = canvas.elements[i].GetBounds();
+                    if (CheckCollisionPointRec(canvas.startPoint, {b.x-5, b.y-5, b.width+10, b.height+10})) {
+                        if (find(canvas.selectedIndices.begin(), canvas.selectedIndices.end(), i) == canvas.selectedIndices.end()) {
+                            canvas.selectedIndices = {i};
+                        }
+                        hitAnything = true;
+                        canvas.isBoxSelecting = false;
+                        SaveBackup(canvas);
+                        break;
+                    }
+                }
 
-    for (size_t i = 0; i < canvas.elements.size(); i++) {
-      const Element &element = canvas.elements[i];
+                if (!hitAnything) {
+                    canvas.selectedIndices.clear();
+                    canvas.isBoxSelecting = true;
+                }
+                canvas.hasMoved = false;
+            }
 
-      if (element.type == LINE_MODE)
-        DrawLineEx(element.start, element.end, element.strokeWidth,
-                   element.color);
-      else if (element.type == CIRCLE_MODE) {
-        float r = Vector2Distance(element.start, element.end);
-        DrawRing(element.start, r - element.strokeWidth / 2,
-                 r + element.strokeWidth / 2, 0, 360, 60, element.color);
-      } else if (element.type == RECTANGLE_MODE) {
-        DrawRectangleLinesEx({min(element.start.x, element.end.x),
-                              min(element.start.y, element.end.y),
-                              abs(element.end.x - element.start.x),
-                              abs(element.end.y - element.start.y)},
-                             element.strokeWidth, element.color);
-      } else if (element.type == PEN_MODE) {
-        if (element.path.size() == 1)
-          DrawCircleV(element.path[0], element.strokeWidth / 2, element.color);
-        else
-          DrawSplineCatmullRom(element.path.data(), (int)element.path.size(),
-                               element.strokeWidth, element.color);
-      }
+            if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
+                canvas.currentMouse = GetMousePosition();
+                Vector2 delta = GetMouseDelta();
 
-      // SELECTION HIGHLIGHT
-      if (canvas.mode == SELECTION_MODE && (int)i == canvas.selectedIndex) {
-        Rectangle bounds;
-        if (element.type == CIRCLE_MODE) {
-          float r = Vector2Distance(element.start, element.end);
-          bounds = {element.start.x - r - 8, element.start.y - r - 8,
-                    (r * 2) + 16, (r * 2) + 16};
-        } else if (element.type == PEN_MODE) {
-          float minX = element.start.x, minY = element.start.y,
-                maxX = element.start.x, maxY = element.start.y;
-          for (auto &p : element.path) {
-            minX = min(minX, p.x);
-            minY = min(minY, p.y);
-            maxX = max(maxX, p.x);
-            maxY = max(maxY, p.y);
-          }
-          bounds = {minX - 8, minY - 8, (maxX - minX) + 16, (maxY - minY) + 16};
+                if (canvas.isBoxSelecting) {
+                    canvas.selectedIndices.clear();
+                    Rectangle selectionBox = {
+                        min(canvas.startPoint.x, canvas.currentMouse.x),
+                        min(canvas.startPoint.y, canvas.currentMouse.y),
+                        abs(canvas.currentMouse.x - canvas.startPoint.x),
+                        abs(canvas.currentMouse.y - canvas.startPoint.y)
+                    };
+                    for (int i = 0; i < (int)canvas.elements.size(); i++) {
+                        if (CheckCollisionRecs(selectionBox, canvas.elements[i].GetBounds())) {
+                            canvas.selectedIndices.push_back(i);
+                        }
+                    }
+                } else if (!canvas.selectedIndices.empty()) {
+                    if (delta.x != 0 || delta.y != 0) {
+                        canvas.hasMoved = true;
+                        for (int idx : canvas.selectedIndices) {
+                            Element &el = canvas.elements[idx];
+                            el.start = Vector2Add(el.start, delta);
+                            el.end = Vector2Add(el.end, delta);
+                            for (auto &p : el.path) p = Vector2Add(p, delta);
+                        }
+                    }
+                }
+            }
+
+            if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
+                if (!canvas.isBoxSelecting && !canvas.hasMoved && !canvas.undoStack.empty()) {
+                    canvas.undoStack.pop_back();
+                }
+                canvas.isDragging = false;
+                canvas.isBoxSelecting = false;
+            }
+
         } else {
-          float minX = min(element.start.x, element.end.x);
-          float minY = min(element.start.y, element.end.y);
-          float maxX = max(element.start.x, element.end.x);
-          float maxY = max(element.start.y, element.end.y);
-          bounds = {minX - 8, minY - 8, (maxX - minX) + 16, (maxY - minY) + 16};
+            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+                canvas.startPoint = GetMousePosition();
+                canvas.isDragging = true;
+                if (canvas.mode == PEN_MODE) {
+                    canvas.currentPath.clear();
+                    canvas.currentPath.push_back(canvas.startPoint);
+                }
+            }
+            if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
+                canvas.currentMouse = GetMousePosition();
+                if (canvas.mode == PEN_MODE && Vector2Distance(canvas.currentPath.back(), canvas.currentMouse) > 2.0f) {
+                    canvas.currentPath.push_back(canvas.currentMouse);
+                }
+            }
+            if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
+                canvas.isDragging = false;
+                float dist = Vector2Distance(canvas.startPoint, canvas.currentMouse);
+                if (canvas.mode == PEN_MODE || dist > 1.0f) {
+                    SaveBackup(canvas);
+                    Element newElement = {canvas.mode, canvas.startPoint, canvas.currentMouse, canvas.strokeWidth, canvas.modeColor};
+                    if (canvas.mode == PEN_MODE) newElement.path = canvas.currentPath;
+                    canvas.elements.push_back(newElement);
+                }
+            }
         }
-        DrawRectangleLinesEx(bounds, 2, MAGENTA);
-      }
 
-      if (canvas.showTags) {
-        DrawRectangle(element.start.x, element.start.y - 20, 20, 20, YELLOW);
-        DrawRectangleLines(element.start.x, element.start.y - 20, 20, 20,
-                           BLACK);
-        DrawText(TextFormat("%d", i), element.start.x + 5, element.start.y - 15,
-                 10, BLACK);
-      }
+        BeginDrawing();
+        ClearBackground(WHITE);
+
+        for (size_t i = 0; i < canvas.elements.size(); i++) {
+            const Element &el = canvas.elements[i];
+            if (el.type == LINE_MODE) DrawLineEx(el.start, el.end, el.strokeWidth, el.color);
+            else if (el.type == CIRCLE_MODE) {
+                float r = Vector2Distance(el.start, el.end);
+                DrawRing(el.start, r - el.strokeWidth / 2, r + el.strokeWidth / 2, 0, 360, 60, el.color);
+            } else if (el.type == RECTANGLE_MODE) {
+                DrawRectangleLinesEx({min(el.start.x, el.end.x), min(el.start.y, el.end.y), abs(el.end.x - el.start.x), abs(el.end.y - el.start.y)}, el.strokeWidth, el.color);
+            } else if (el.type == PEN_MODE) {
+                if (el.path.size() == 1) DrawCircleV(el.path[0], el.strokeWidth / 2, el.color);
+                else DrawSplineCatmullRom(el.path.data(), (int)el.path.size(), el.strokeWidth, el.color);
+            }
+
+            if (canvas.mode == SELECTION_MODE && find(canvas.selectedIndices.begin(), canvas.selectedIndices.end(), (int)i) != canvas.selectedIndices.end()) {
+                Rectangle b = el.GetBounds();
+                DrawRectangleLinesEx({b.x - 5, b.y - 5, b.width + 10, b.height + 10}, 2, MAGENTA);
+            }
+
+            if (canvas.showTags) {
+                DrawRectangle(el.start.x, el.start.y - 20, 20, 20, YELLOW);
+                DrawRectangleLines(el.start.x, el.start.y - 20, 20, 20, BLACK);
+                DrawText(TextFormat("%d", (int)i), el.start.x + 5, el.start.y - 15, 10, BLACK);
+            }
+        }
+
+        if (canvas.isDragging) {
+            if (canvas.mode == SELECTION_MODE && canvas.isBoxSelecting) {
+                Rectangle box = { min(canvas.startPoint.x, canvas.currentMouse.x), min(canvas.startPoint.y, canvas.currentMouse.y), abs(canvas.currentMouse.x - canvas.startPoint.x), abs(canvas.currentMouse.y - canvas.startPoint.y) };
+                DrawRectangleRec(box, Fade(BLUE, 0.2f));
+                DrawRectangleLinesEx(box, 1, BLUE);
+            } else if (canvas.mode != SELECTION_MODE) {
+                Vector2 m = GetMousePosition();
+                if (canvas.mode == LINE_MODE) DrawLineEx(canvas.startPoint, m, canvas.strokeWidth, Fade(canvas.modeColor, 0.5f));
+                else if (canvas.mode == CIRCLE_MODE) {
+                    float r = Vector2Distance(canvas.startPoint, m);
+                    DrawRing(canvas.startPoint, r - canvas.strokeWidth/2, r + canvas.strokeWidth/2, 0, 360, 60, Fade(canvas.modeColor, 0.5f));
+                } else if (canvas.mode == RECTANGLE_MODE) {
+                    DrawRectangleLinesEx({min(canvas.startPoint.x, m.x), min(canvas.startPoint.y, m.y), abs(m.x - canvas.startPoint.x), abs(m.y - canvas.startPoint.y)}, canvas.strokeWidth, Fade(canvas.modeColor, 0.5f));
+                } else if (canvas.mode == PEN_MODE && canvas.currentPath.size() > 1) {
+                    DrawSplineCatmullRom(canvas.currentPath.data(), (int)canvas.currentPath.size(), canvas.strokeWidth, canvas.modeColor);
+                }
+            }
+        }
+
+        DrawTextEx(canvas.font, "Current Mode:", {10, 10}, 24, 2, DARKGRAY);
+        DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2, canvas.modeColor);
+        EndDrawing();
     }
-
-    // Preview
-    if (canvas.isDragging && canvas.mode != SELECTION_MODE) {
-      Vector2 m = GetMousePosition();
-      if (canvas.mode == LINE_MODE)
-        DrawLineEx(canvas.startPoint, m, canvas.strokeWidth,
-                   Fade(canvas.modeColor, 0.5f));
-      else if (canvas.mode == CIRCLE_MODE) {
-        float r = Vector2Distance(canvas.startPoint, m);
-        DrawRing(canvas.startPoint, r - canvas.strokeWidth / 2,
-                 r + canvas.strokeWidth / 2, 0, 360, 60,
-                 Fade(canvas.modeColor, 0.5f));
-      } else if (canvas.mode == RECTANGLE_MODE) {
-        DrawRectangleLinesEx(
-            {min(canvas.startPoint.x, m.x), min(canvas.startPoint.y, m.y),
-             abs(m.x - canvas.startPoint.x), abs(m.y - canvas.startPoint.y)},
-            canvas.strokeWidth, Fade(canvas.modeColor, 0.5f));
-      } else if (canvas.mode == PEN_MODE && canvas.currentPath.size() > 1) {
-        DrawSplineCatmullRom(canvas.currentPath.data(),
-                             (int)canvas.currentPath.size(), canvas.strokeWidth,
-                             canvas.modeColor);
-      }
-    }
-
-    DrawTextEx(canvas.font, "Current Mode:", {10, 10}, 24, 2, DARKGRAY);
-    DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2,
-               canvas.modeColor);
-
-    EndDrawing();
-  }
-
-  UnloadFont(canvas.font);
-  CloseWindow();
-  return 0;
+    UnloadFont(canvas.font);
+    CloseWindow();
+    return 0;
 }
