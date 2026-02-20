@@ -765,8 +765,18 @@ int main() {
         }
 
         int targetIdx = FindElementIndexByID(canvas, targetID);
-        if (targetIdx != -1)
-          canvas.selectedIndices = {targetIdx};
+        if (targetIdx != -1) {
+          SaveBackup(canvas);
+          RestoreZOrder(canvas);
+          targetIdx = FindElementIndexByID(canvas, targetID);
+          if (targetIdx != -1) {
+            Element selected = canvas.elements[targetIdx];
+            selected.originalIndex = targetIdx;
+            canvas.elements.erase(canvas.elements.begin() + targetIdx);
+            canvas.elements.push_back(selected);
+            canvas.selectedIndices = {(int)canvas.elements.size() - 1};
+          }
+        }
         canvas.isTypingNumber = false;
       }
 
