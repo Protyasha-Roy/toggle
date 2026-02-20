@@ -466,12 +466,15 @@ int main() {
   canvas.font = LoadFont("IosevkaNerdFontMono-Regular.ttf");
   SetTextureFilter(canvas.font.texture, TEXTURE_FILTER_BILINEAR);
 
-  while (true) {
+  while (!WindowShouldClose()) {
     bool escPressed = IsKeyPressed(KEY_ESCAPE);
-    if (WindowShouldClose() && !escPressed)
-      break;
-
-    int key = GetKeyPressed();
+    int key = 0;
+    int polledKey = 0;
+    while ((polledKey = GetKeyPressed()) != 0) {
+      key = polledKey;
+      if (polledKey == KEY_ESCAPE)
+        escPressed = true;
+    }
     bool shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
     bool ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
     Vector2 mouseScreen = GetMousePosition();
@@ -762,8 +765,7 @@ int main() {
       MoveSelectionZOrder(canvas, true);
     }
 
-    if (!canvas.isTextEditing && canvas.mode == SELECTION_MODE && escPressed &&
-        !canvas.selectedIndices.empty()) {
+    if (!canvas.isTextEditing && escPressed && !canvas.selectedIndices.empty()) {
       RestoreZOrder(canvas);
       canvas.selectedIndices.clear();
     }
