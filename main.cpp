@@ -24,6 +24,7 @@ struct Element {
   Vector2 end;
   float strokeWidth;
   Color color;
+  vector<Vector2> path;
 };
 
 struct Canvas {
@@ -36,6 +37,7 @@ struct Canvas {
   const char *modeText;
   Color modeColor;
   vector<Element> elements;
+  vector<Vector2> currentPath;
 };
 
 int main() {
@@ -65,12 +67,30 @@ int main() {
       canvas.mode = TEXT_MODE;
     if (IsKeyPressed(KEY_R))
       canvas.mode = RECTANGLE_MODE;
+    if (IsKeyPressed(KEY_P))
+      canvas.mode = PEN_MODE;
 
     if (canvas.mode == LINE_MODE || canvas.mode == CIRCLE_MODE ||
-        canvas.mode == RECTANGLE_MODE) {
+        canvas.mode == RECTANGLE_MODE || canvas.mode == PEN_MODE) {
       if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         canvas.startPoint = GetMousePosition();
         canvas.isDragging = true;
+
+        if (canvas.mode == PEN_MODE) {
+          canvas.currentPath.clear();
+          canvas.currentPath.push_back(canvas.startPoint);
+        }
+      }
+
+      if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && canvas.isDragging) {
+        canvas.currentMouse = GetMousePosition();
+        if (canvas.mode == PEN_MODE) {
+          if (canvas.currentPath.empty() ||
+              Vector2Distance(canvas.currentPath.back(), canvas.currentMouse) >
+                  2.0f) {
+            canvas.currentPath.push_back(canvas.currentMouse);
+          }
+        }
       }
 
       if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
@@ -79,6 +99,10 @@ int main() {
         Element newElement = {canvas.mode, canvas.startPoint,
                               canvas.currentMouse, canvas.strokeWidth,
                               canvas.modeColor};
+
+        if (canvas.mode == PEN_MODE) {
+          newElement.path = canvas.currentPath;
+        }
 
         canvas.elements.push_back(newElement);
       }
@@ -109,8 +133,13 @@ int main() {
       canvas.modeText = "RECTANGLE";
       canvas.modeColor = RED;
       break;
+    case PEN_MODE:
+      canvas.modeText = "PEN";
+      canvas.modeColor = BLACK;
+      break;
     }
 
+    // Save drawing
     for (const Element &element : canvas.elements) {
       if (element.type == LINE_MODE) {
         DrawLineEx(element.start, element.end, element.strokeWidth,
@@ -124,13 +153,20 @@ int main() {
         float y = min(element.start.y, element.end.y);
         float width = abs(element.end.x - element.start.x);
         float height = abs(element.end.y - element.start.y);
-        DrawRectangleLinesEx({x, y, width, height}, element.strokeWidth, element.color);
+        DrawRectangleLinesEx({x, y, width, height}, element.strokeWidth,
+                             element.color);
+      } else if (element.type == PEN_MODE) {
+        if (element.path.size() > 1) {
+          DrawSplineCatmullRom(element.path.data(), element.path.size(),
+                               element.strokeWidth, element.color);
+        }
       }
     }
 
     DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2,
                canvas.modeColor);
 
+    // Preview drawing
     if (canvas.isDragging) {
       canvas.currentMouse = GetMousePosition();
       if (canvas.mode == LINE_MODE) {
@@ -140,7 +176,8 @@ int main() {
         float radius = Vector2Distance(canvas.startPoint, canvas.currentMouse);
 
         DrawRing(canvas.startPoint, radius - canvas.strokeWidth / 2,
-                 radius + canvas.strokeWidth / 2, 0, 360, 128, canvas.modeColor);
+                 radius + canvas.strokeWidth / 2, 0, 360, 128,
+                 canvas.modeColor);
       } else if (canvas.mode == RECTANGLE_MODE) {
         float x = min(canvas.startPoint.x, canvas.currentMouse.x);
         float y = min(canvas.startPoint.y, canvas.currentMouse.y);
@@ -150,6 +187,12 @@ int main() {
 
         Rectangle rect = {x, y, width, height};
         DrawRectangleLinesEx(rect, canvas.strokeWidth, canvas.modeColor);
+      } else if (canvas.mode == PEN_MODE) {
+        if (canvas.currentPath.size() > 1) {
+          DrawSplineCatmullRom(canvas.currentPath.data(),
+                               canvas.currentPath.size(), canvas.strokeWidth,
+                               canvas.modeColor);
+        }
       }
     }
 
