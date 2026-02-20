@@ -118,6 +118,8 @@ struct Canvas {
   Camera2D camera = {};
 };
 
+void RestoreZOrder(Canvas &canvas);
+
 void SaveBackup(Canvas &canvas) {
   canvas.undoStack.push_back(canvas.elements);
   canvas.redoStack.clear();
@@ -249,6 +251,49 @@ vector<int> GetSelectedIDs(const Canvas &canvas) {
     }
   }
   return ids;
+}
+
+void ReselectByIDs(Canvas &canvas, const vector<int> &ids) {
+  canvas.selectedIndices.clear();
+  for (int id : ids) {
+    int idx = FindElementIndexByID(canvas, id);
+    if (idx != -1)
+      canvas.selectedIndices.push_back(idx);
+  }
+}
+
+void MoveSelectionZOrder(Canvas &canvas, bool forward) {
+  vector<int> selectedIDs = GetSelectedIDs(canvas);
+  if (selectedIDs.empty())
+    return;
+
+  SaveBackup(canvas);
+  RestoreZOrder(canvas);
+
+  vector<bool> isSelected(canvas.elements.size(), false);
+  for (int id : selectedIDs) {
+    int idx = FindElementIndexByID(canvas, id);
+    if (idx != -1)
+      isSelected[idx] = true;
+  }
+
+  if (forward) {
+    for (int i = (int)canvas.elements.size() - 2; i >= 0; --i) {
+      if (isSelected[i] && !isSelected[i + 1]) {
+        swap(canvas.elements[i], canvas.elements[i + 1]);
+        swap(isSelected[i], isSelected[i + 1]);
+      }
+    }
+  } else {
+    for (int i = 1; i < (int)canvas.elements.size(); ++i) {
+      if (isSelected[i] && !isSelected[i - 1]) {
+        swap(canvas.elements[i], canvas.elements[i - 1]);
+        swap(isSelected[i], isSelected[i - 1]);
+      }
+    }
+  }
+
+  ReselectByIDs(canvas, selectedIDs);
 }
 
 void DrawDashedLine(Vector2 start, Vector2 end, float width, Color color) {
@@ -435,7 +480,7 @@ int main() {
       }
     }
 
-    if (IsKeyPressed(KEY_EQUAL) || IsKeyPressed(KEY_KP_ADD)) {
+    if ((shiftDown && IsKeyPressed(KEY_EQUAL)) || IsKeyPressed(KEY_KP_ADD)) {
       float oldZoom = canvas.camera.zoom;
       float nextZoom = oldZoom * 1.1f;
       if (nextZoom > 10.0f)
@@ -448,7 +493,8 @@ int main() {
             Vector2Subtract(canvas.camera.target, Vector2Subtract(before, after));
       }
     }
-    if (IsKeyPressed(KEY_MINUS) || IsKeyPressed(KEY_KP_SUBTRACT)) {
+    if ((shiftDown && IsKeyPressed(KEY_MINUS)) ||
+        IsKeyPressed(KEY_KP_SUBTRACT)) {
       float oldZoom = canvas.camera.zoom;
       float nextZoom = oldZoom / 1.1f;
       if (nextZoom < 0.1f)
@@ -468,9 +514,21 @@ int main() {
       canvas.editingIndex = -1;
       canvas.textEditBackedUp = false;
     }
+    if (escPressed && !canvas.isTextEditing) {
+      canvas.isTypingNumber = false;
+      canvas.inputNumber = 0;
+      canvas.lastKey = 0;
+    }
     NormalizeCanvasIDs(canvas);
     if (canvas.isTextEditing)
       key = 0;
+
+    if (!canvas.isTextEditing && !shiftDown && IsKeyPressed(KEY_EQUAL)) {
+      canvas.strokeWidth = min(50.0f, canvas.strokeWidth + 1.0f);
+    }
+    if (!canvas.isTextEditing && !shiftDown && IsKeyPressed(KEY_MINUS)) {
+      canvas.strokeWidth = max(1.0f, canvas.strokeWidth - 1.0f);
+    }
 
     // --- key handling: NOTE: P is handled in a single branch to avoid both
     // paste and pen activation on Shift+P
@@ -682,6 +740,12 @@ int main() {
         }
         canvas.selectedIndices.clear();
       }
+    }
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_LEFT_BRACKET)) {
+      MoveSelectionZOrder(canvas, false);
+    }
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_RIGHT_BRACKET)) {
+      MoveSelectionZOrder(canvas, true);
     }
 
     if (!canvas.isTextEditing && canvas.mode == SELECTION_MODE && escPressed &&
