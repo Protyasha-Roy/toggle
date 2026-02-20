@@ -8,6 +8,7 @@ using namespace std;
 
 enum Mode {
   SELECTION_MODE,
+  MOVE_MODE,
   LINE_MODE,
   DOTTEDLINE_MODE,
   ARROWLINE_MODE,
@@ -112,6 +113,7 @@ struct Canvas {
   double lastClickTime = 0.0;
   Vector2 lastClickPos = {0};
   int pasteOffsetIndex = 0;
+  Camera2D camera = {};
 };
 
 void SaveBackup(Canvas &canvas) {
@@ -303,6 +305,10 @@ int main() {
   InitWindow(screenWidth, screenHeight, "Toggle : no more toggling");
   SetExitKey(KEY_NULL);
   SetTargetFPS(60);
+  canvas.camera.offset = {0.0f, 0.0f};
+  canvas.camera.target = {0.0f, 0.0f};
+  canvas.camera.rotation = 0.0f;
+  canvas.camera.zoom = 1.0f;
   canvas.font = LoadFont("IosevkaNerdFontMono-Regular.ttf");
   SetTextureFilter(canvas.font.texture, TEXTURE_FILTER_BILINEAR);
 
@@ -314,6 +320,52 @@ int main() {
     int key = GetKeyPressed();
     bool shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
     bool ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+    Vector2 mouseScreen = GetMousePosition();
+    Vector2 mouseWorld = GetScreenToWorld2D(mouseScreen, canvas.camera);
+
+    float wheel = GetMouseWheelMove();
+    if (wheel != 0.0f) {
+      float oldZoom = canvas.camera.zoom;
+      float nextZoom = oldZoom + wheel * 0.1f * oldZoom;
+      if (nextZoom < 0.1f)
+        nextZoom = 0.1f;
+      if (nextZoom > 10.0f)
+        nextZoom = 10.0f;
+      if (nextZoom != oldZoom) {
+        Vector2 before = GetScreenToWorld2D(mouseScreen, canvas.camera);
+        canvas.camera.zoom = nextZoom;
+        Vector2 after = GetScreenToWorld2D(mouseScreen, canvas.camera);
+        canvas.camera.target =
+            Vector2Subtract(canvas.camera.target, Vector2Subtract(before, after));
+      }
+    }
+
+    if (IsKeyPressed(KEY_EQUAL) || IsKeyPressed(KEY_KP_ADD)) {
+      float oldZoom = canvas.camera.zoom;
+      float nextZoom = oldZoom * 1.1f;
+      if (nextZoom > 10.0f)
+        nextZoom = 10.0f;
+      if (nextZoom != oldZoom) {
+        Vector2 before = GetScreenToWorld2D(mouseScreen, canvas.camera);
+        canvas.camera.zoom = nextZoom;
+        Vector2 after = GetScreenToWorld2D(mouseScreen, canvas.camera);
+        canvas.camera.target =
+            Vector2Subtract(canvas.camera.target, Vector2Subtract(before, after));
+      }
+    }
+    if (IsKeyPressed(KEY_MINUS) || IsKeyPressed(KEY_KP_SUBTRACT)) {
+      float oldZoom = canvas.camera.zoom;
+      float nextZoom = oldZoom / 1.1f;
+      if (nextZoom < 0.1f)
+        nextZoom = 0.1f;
+      if (nextZoom != oldZoom) {
+        Vector2 before = GetScreenToWorld2D(mouseScreen, canvas.camera);
+        canvas.camera.zoom = nextZoom;
+        Vector2 after = GetScreenToWorld2D(mouseScreen, canvas.camera);
+        canvas.camera.target =
+            Vector2Subtract(canvas.camera.target, Vector2Subtract(before, after));
+      }
+    }
 
     if (canvas.isTextEditing && escPressed) {
       canvas.isTextEditing = false;
@@ -379,6 +431,12 @@ int main() {
       canvas.mode = SELECTION_MODE;
       canvas.modeText = "SELECTION";
       canvas.modeColor = MAROON;
+      canvas.isTypingNumber = false;
+    }
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_M)) {
+      canvas.mode = MOVE_MODE;
+      canvas.modeText = "MOVE";
+      canvas.modeColor = DARKBROWN;
       canvas.isTypingNumber = false;
     }
     if (!canvas.isTextEditing && IsKeyPressed(KEY_L)) {
@@ -531,7 +589,13 @@ int main() {
     }
 
     // SELECTION MODE specific behavior
-    if (canvas.mode == SELECTION_MODE) {
+    if (canvas.mode == MOVE_MODE) {
+      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+        Vector2 delta = GetMouseDelta();
+        canvas.camera.target.x -= delta.x / canvas.camera.zoom;
+        canvas.camera.target.y -= delta.y / canvas.camera.zoom;
+      }
+    } else if (canvas.mode == SELECTION_MODE) {
       if (key >= KEY_ZERO && key <= KEY_NINE) {
         double currentTime = GetTime();
         int digit = key - KEY_ZERO;
@@ -605,7 +669,8 @@ int main() {
       }
 
       if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        canvas.startPoint = GetMousePosition();
+        canvas.startPoint = mouseWorld;
+        canvas.currentMouse = mouseWorld;
         canvas.isDragging = true;
         bool hit = false;
         int hitIndex = -1;
@@ -646,8 +711,9 @@ int main() {
       }
 
       if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
-        canvas.currentMouse = GetMousePosition();
-        Vector2 delta = GetMouseDelta();
+        Vector2 prevMouse = canvas.currentMouse;
+        canvas.currentMouse = GetScreenToWorld2D(GetMousePosition(), canvas.camera);
+        Vector2 delta = Vector2Subtract(canvas.currentMouse, prevMouse);
         if (canvas.isBoxSelecting) {
           canvas.selectedIndices.clear();
           Rectangle selectionBox = {
@@ -681,7 +747,7 @@ int main() {
       }
     } else if (canvas.mode == ERASER_MODE) {
       if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
-        Vector2 m = GetMousePosition();
+        Vector2 m = mouseWorld;
         for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
           Rectangle b = canvas.elements[i].GetBounds();
           if (CheckCollisionPointRec(
@@ -695,7 +761,7 @@ int main() {
       }
     } else if (canvas.mode == TEXT_MODE) {
       if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        Vector2 m = GetMousePosition();
+        Vector2 m = mouseWorld;
         int hitIndex = -1;
         for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
           if (canvas.elements[i].type != TEXT_MODE)
@@ -775,7 +841,7 @@ int main() {
     } else {
       // Drawing modes (line, rect, circle, pen,...)
       if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        canvas.startPoint = GetMousePosition();
+        canvas.startPoint = mouseWorld;
         canvas.currentMouse = canvas.startPoint;
         canvas.isDragging = true;
         if (canvas.mode == PEN_MODE) {
@@ -784,7 +850,7 @@ int main() {
         }
       }
       if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
-        canvas.currentMouse = GetMousePosition();
+        canvas.currentMouse = GetScreenToWorld2D(GetMousePosition(), canvas.camera);
         if (canvas.mode == PEN_MODE &&
             Vector2Distance(canvas.currentPath.back(), canvas.currentMouse) >
                 2.0f)
@@ -816,6 +882,7 @@ int main() {
     // --- Drawing
     BeginDrawing();
     ClearBackground(WHITE);
+    BeginMode2D(canvas.camera);
 
     for (size_t i = 0; i < canvas.elements.size(); i++) {
       if (canvas.mode == TEXT_MODE && canvas.isTextEditing &&
@@ -860,7 +927,7 @@ int main() {
         DrawRectangleRec(box, Fade(BLUE, 0.2f));
         DrawRectangleLinesEx(box, 1, BLUE);
       } else if (canvas.mode != SELECTION_MODE && canvas.mode != ERASER_MODE) {
-        Vector2 m = GetMousePosition();
+        Vector2 m = GetScreenToWorld2D(GetMousePosition(), canvas.camera);
         Element preview;
         preview.type = canvas.mode;
         preview.start = canvas.startPoint;
@@ -873,11 +940,13 @@ int main() {
       }
     }
     if (canvas.mode == ERASER_MODE)
-      DrawCircleLinesV(GetMousePosition(), 10, ORANGE);
+      DrawCircleLinesV(GetScreenToWorld2D(GetMousePosition(), canvas.camera), 10,
+                       ORANGE);
     if (canvas.mode == TEXT_MODE && canvas.isTextEditing) {
       DrawTextEx(canvas.font, canvas.textBuffer.c_str(), canvas.textPos,
                  canvas.textSize, 2, Fade(canvas.editingColor, 0.7f));
     }
+    EndMode2D();
     DrawTextEx(canvas.font, "Current Mode:", {10, 10}, 24, 2, DARKGRAY);
     DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2,
                canvas.modeColor);
