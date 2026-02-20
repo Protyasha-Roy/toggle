@@ -60,6 +60,7 @@ int main() {
 
   while (!WindowShouldClose()) {
     // Update
+
     // Mode Switching
     if (IsKeyPressed(KEY_S)) {
       canvas.mode = SELECTION_MODE;
@@ -119,52 +120,44 @@ int main() {
       if (IsKeyPressed(KEY_K) && !canvas.elements.empty()) {
         canvas.isTypingNumber = false;
         canvas.selectedIndex = (canvas.selectedIndex <= 0)
-                                   ? canvas.elements.size() - 1
+                                   ? (int)canvas.elements.size() - 1
                                    : canvas.selectedIndex - 1;
       }
 
-      // Mouse Selection (Clicking an element)
+      // Mouse Selection
       if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-        Vector2 mPos = GetMousePosition();
+        Vector2 mousePos = GetMousePosition();
         canvas.selectedIndex = -1;
-
-        // Iterate backwards to select the "top" element first
         for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
-          Element &el = canvas.elements[i];
+          Element &element = canvas.elements[i];
           bool isHit = false;
 
-          if (el.type == CIRCLE_MODE) {
-            // Check distance from center (start) to mouse
-            float radius = Vector2Distance(el.start, el.end);
-            if (CheckCollisionPointCircle(mPos, el.start, radius)) {
+          if (element.type == CIRCLE_MODE) {
+            float radius = Vector2Distance(element.start, element.end);
+            if (CheckCollisionPointCircle(mousePos, element.start, radius))
               isHit = true;
-            }
-          } else if (el.type == PEN_MODE) {
-            // Check bounding box of the whole path
-            float minX = el.start.x, minY = el.start.y, maxX = el.start.x,
-                  maxY = el.start.y;
-            for (auto &p : el.path) {
+          } else if (element.type == PEN_MODE) {
+            float minX = element.start.x, minY = element.start.y,
+                  maxX = element.start.x, maxY = element.start.y;
+            for (auto &p : element.path) {
               minX = min(minX, p.x);
               minY = min(minY, p.y);
               maxX = max(maxX, p.x);
               maxY = max(maxY, p.y);
             }
-            if (CheckCollisionPointRec(mPos, {minX - 10, minY - 10,
-                                              (maxX - minX) + 20,
-                                              (maxY - minY) + 20})) {
+            if (CheckCollisionPointRec(mousePos, {minX - 10, minY - 10,
+                                                  (maxX - minX) + 20,
+                                                  (maxY - minY) + 20}))
               isHit = true;
-            }
           } else {
-            // Lines and Rectangles
-            float minX = min(el.start.x, el.end.x);
-            float minY = min(el.start.y, el.end.y);
-            float maxX = max(el.start.x, el.end.x);
-            float maxY = max(el.start.y, el.end.y);
-            if (CheckCollisionPointRec(mPos, {minX - 10, minY - 10,
-                                              (maxX - minX) + 20,
-                                              (maxY - minY) + 20})) {
+            float minX = min(element.start.x, element.end.x);
+            float minY = min(element.start.y, element.end.y);
+            float maxX = max(element.start.x, element.end.x);
+            float maxY = max(element.start.y, element.end.y);
+            if (CheckCollisionPointRec(mousePos, {minX - 10, minY - 10,
+                                                  (maxX - minX) + 20,
+                                                  (maxY - minY) + 20}))
               isHit = true;
-            }
           }
 
           if (isHit) {
@@ -174,13 +167,15 @@ int main() {
           }
         }
       }
+
+      // Dragging Logic
       if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && canvas.isDragging &&
           canvas.selectedIndex != -1) {
         Vector2 delta = GetMouseDelta();
-        Element &el = canvas.elements[canvas.selectedIndex];
-        el.start = Vector2Add(el.start, delta);
-        el.end = Vector2Add(el.end, delta);
-        for (auto &p : el.path)
+        Element &selectedElement = canvas.elements[canvas.selectedIndex];
+        selectedElement.start = Vector2Add(selectedElement.start, delta);
+        selectedElement.end = Vector2Add(selectedElement.end, delta);
+        for (auto &p : selectedElement.path)
           p = Vector2Add(p, delta);
       }
       if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON))
@@ -207,12 +202,17 @@ int main() {
       }
       if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
         canvas.isDragging = false;
-        Element newElement = {canvas.mode, canvas.startPoint,
-                              canvas.currentMouse, canvas.strokeWidth,
-                              canvas.modeColor};
-        if (canvas.mode == PEN_MODE)
-          newElement.path = canvas.currentPath;
-        canvas.elements.push_back(newElement);
+
+        //  Prevent zero-size ghost elements
+        float dist = Vector2Distance(canvas.startPoint, canvas.currentMouse);
+        if (canvas.mode == PEN_MODE || dist > 1.0f) {
+          Element newElement = {canvas.mode, canvas.startPoint,
+                                canvas.currentMouse, canvas.strokeWidth,
+                                canvas.modeColor};
+          if (canvas.mode == PEN_MODE)
+            newElement.path = canvas.currentPath;
+          canvas.elements.push_back(newElement);
+        }
       }
     }
 
@@ -220,41 +220,41 @@ int main() {
     BeginDrawing();
     ClearBackground(WHITE);
 
-    // Draw saved elements
     for (size_t i = 0; i < canvas.elements.size(); i++) {
-      const Element &el = canvas.elements[i];
+      const Element &element = canvas.elements[i];
 
-      if (el.type == LINE_MODE)
-        DrawLineEx(el.start, el.end, el.strokeWidth, el.color);
-      else if (el.type == CIRCLE_MODE) {
-        float r = Vector2Distance(el.start, el.end);
-        DrawRing(el.start, r - el.strokeWidth / 2, r + el.strokeWidth / 2, 0,
-                 360, 60, el.color);
-      } else if (el.type == RECTANGLE_MODE) {
-        DrawRectangleLinesEx(
-            {min(el.start.x, el.end.x), min(el.start.y, el.end.y),
-             abs(el.end.x - el.start.x), abs(el.end.y - el.start.y)},
-            el.strokeWidth, el.color);
-      } else if (el.type == PEN_MODE) {
-        if (el.path.size() == 1)
-          DrawCircleV(el.path[0], el.strokeWidth / 2, el.color);
+      if (element.type == LINE_MODE)
+        DrawLineEx(element.start, element.end, element.strokeWidth,
+                   element.color);
+      else if (element.type == CIRCLE_MODE) {
+        float r = Vector2Distance(element.start, element.end);
+        DrawRing(element.start, r - element.strokeWidth / 2,
+                 r + element.strokeWidth / 2, 0, 360, 60, element.color);
+      } else if (element.type == RECTANGLE_MODE) {
+        DrawRectangleLinesEx({min(element.start.x, element.end.x),
+                              min(element.start.y, element.end.y),
+                              abs(element.end.x - element.start.x),
+                              abs(element.end.y - element.start.y)},
+                             element.strokeWidth, element.color);
+      } else if (element.type == PEN_MODE) {
+        if (element.path.size() == 1)
+          DrawCircleV(element.path[0], element.strokeWidth / 2, element.color);
         else
-          DrawSplineCatmullRom(el.path.data(), (int)el.path.size(),
-                               el.strokeWidth, el.color);
+          DrawSplineCatmullRom(element.path.data(), (int)element.path.size(),
+                               element.strokeWidth, element.color);
       }
 
       // SELECTION HIGHLIGHT
       if (canvas.mode == SELECTION_MODE && (int)i == canvas.selectedIndex) {
         Rectangle bounds;
-
-        if (el.type == CIRCLE_MODE) {
-          float r = Vector2Distance(el.start, el.end);
-          bounds = {el.start.x - r - 8, el.start.y - r - 8, (r * 2) + 16,
-                    (r * 2) + 16};
-        } else if (el.type == PEN_MODE) {
-          float minX = el.start.x, minY = el.start.y, maxX = el.start.x,
-                maxY = el.start.y;
-          for (auto &p : el.path) {
+        if (element.type == CIRCLE_MODE) {
+          float r = Vector2Distance(element.start, element.end);
+          bounds = {element.start.x - r - 8, element.start.y - r - 8,
+                    (r * 2) + 16, (r * 2) + 16};
+        } else if (element.type == PEN_MODE) {
+          float minX = element.start.x, minY = element.start.y,
+                maxX = element.start.x, maxY = element.start.y;
+          for (auto &p : element.path) {
             minX = min(minX, p.x);
             minY = min(minY, p.y);
             maxX = max(maxX, p.x);
@@ -262,24 +262,25 @@ int main() {
           }
           bounds = {minX - 8, minY - 8, (maxX - minX) + 16, (maxY - minY) + 16};
         } else {
-          float minX = min(el.start.x, el.end.x);
-          float minY = min(el.start.y, el.end.y);
-          float maxX = max(el.start.x, el.end.x);
-          float maxY = max(el.start.y, el.end.y);
+          float minX = min(element.start.x, element.end.x);
+          float minY = min(element.start.y, element.end.y);
+          float maxX = max(element.start.x, element.end.x);
+          float maxY = max(element.start.y, element.end.y);
           bounds = {minX - 8, minY - 8, (maxX - minX) + 16, (maxY - minY) + 16};
         }
-
         DrawRectangleLinesEx(bounds, 2, MAGENTA);
       }
+
       if (canvas.showTags) {
-        DrawRectangle(el.start.x, el.start.y - 20, 20, 20, YELLOW);
-        DrawRectangleLines(el.start.x, el.start.y - 20, 20, 20, BLACK);
-        DrawText(TextFormat("%d", i), el.start.x + 5, el.start.y - 15, 10,
-                 BLACK);
+        DrawRectangle(element.start.x, element.start.y - 20, 20, 20, YELLOW);
+        DrawRectangleLines(element.start.x, element.start.y - 20, 20, 20,
+                           BLACK);
+        DrawText(TextFormat("%d", i), element.start.x + 5, element.start.y - 15,
+                 10, BLACK);
       }
     }
 
-    // Preview Drawing
+    // Preview
     if (canvas.isDragging && canvas.mode != SELECTION_MODE) {
       Vector2 m = GetMousePosition();
       if (canvas.mode == LINE_MODE)
@@ -302,7 +303,6 @@ int main() {
       }
     }
 
-    
     DrawTextEx(canvas.font, "Current Mode:", {10, 10}, 24, 2, DARKGRAY);
     DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2,
                canvas.modeColor);
