@@ -1,6 +1,7 @@
 #include "raylib.h"
 #include "raymath.h"
 #include <algorithm>
+#include <string>
 #include <vector>
 
 using namespace std;
@@ -30,6 +31,7 @@ struct Element {
   int originalIndex = -1;
   int uniqueID = -1;
   vector<Element> children;
+  string text;
 
   Rectangle GetBounds() const {
     float minX, minY, maxX, maxY;
@@ -55,13 +57,18 @@ struct Element {
         maxX = max(maxX, p.x);
         maxY = max(maxY, p.y);
       }
-    } else if (type == CIRCLE_MODE || type == DOTTEDCIRCLE_MODE) {
-      float r = Vector2Distance(start, end);
-      minX = start.x - r;
-      minY = start.y - r;
-      maxX = start.x + r;
-      maxY = start.y + r;
-    } else {
+  } else if (type == CIRCLE_MODE || type == DOTTEDCIRCLE_MODE) {
+    float r = Vector2Distance(start, end);
+    minX = start.x - r;
+    minY = start.y - r;
+    maxX = start.x + r;
+    maxY = start.y + r;
+  } else if (type == TEXT_MODE) {
+    minX = start.x;
+    minY = start.y;
+    maxX = end.x;
+    maxY = end.y;
+  } else {
       minX = min(start.x, end.x);
       minY = min(start.y, end.y);
       maxX = max(start.x, end.x);
@@ -94,6 +101,17 @@ struct Canvas {
   bool isBoxSelecting = false;
   int lastKey = 0;
   int nextElementId = 0;
+  bool isTextEditing = false;
+  string textBuffer;
+  Vector2 textPos = {0};
+  float textSize = 24.0f;
+  int editingIndex = -1;
+  string editingOriginalText;
+  Color editingColor = BLACK;
+  bool textEditBackedUp = false;
+  double lastClickTime = 0.0;
+  Vector2 lastClickPos = {0};
+  int pasteOffsetIndex = 0;
 };
 
 void SaveBackup(Canvas &canvas) {
@@ -122,6 +140,18 @@ int FindElementIndexByID(const Canvas &canvas, int id) {
       return i;
   }
   return -1;
+}
+
+vector<int> GetSelectedIDs(const Canvas &canvas) {
+  vector<int> ids;
+  for (int idx : canvas.selectedIndices) {
+    if (idx >= 0 && idx < (int)canvas.elements.size()) {
+      int id = canvas.elements[idx].uniqueID;
+      if (id >= 0 && find(ids.begin(), ids.end(), id) == ids.end())
+        ids.push_back(id);
+    }
+  }
+  return ids;
 }
 
 void DrawDashedLine(Vector2 start, Vector2 end, float width, Color color) {
@@ -164,7 +194,7 @@ void DrawDashedRing(Vector2 center, float radius, float width, Color color) {
   }
 }
 
-void DrawElement(const Element &el) {
+void DrawElement(const Element &el, const Font &font, float textSize) {
   if (el.type == LINE_MODE)
     DrawLineEx(el.start, el.end, el.strokeWidth, el.color);
   else if (el.type == DOTTEDLINE_MODE)
@@ -209,7 +239,9 @@ void DrawElement(const Element &el) {
     }
   } else if (el.type == GROUP_MODE) {
     for (const auto &child : el.children)
-      DrawElement(child);
+      DrawElement(child, font, textSize);
+  } else if (el.type == TEXT_MODE) {
+    DrawTextEx(font, el.text.c_str(), el.start, textSize, 2, el.color);
   }
 }
 
@@ -269,34 +301,52 @@ int main() {
   Canvas canvas;
   SetConfigFlags(FLAG_MSAA_4X_HINT);
   InitWindow(screenWidth, screenHeight, "Toggle : no more toggling");
+  SetExitKey(KEY_NULL);
   SetTargetFPS(60);
   canvas.font = LoadFont("IosevkaNerdFontMono-Regular.ttf");
   SetTextureFilter(canvas.font.texture, TEXTURE_FILTER_BILINEAR);
 
-  while (!WindowShouldClose()) {
+  while (true) {
+    bool escPressed = IsKeyPressed(KEY_ESCAPE);
+    if (WindowShouldClose() && !escPressed)
+      break;
+
     int key = GetKeyPressed();
+    bool shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
+    bool ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+
+    if (canvas.isTextEditing && escPressed) {
+      canvas.isTextEditing = false;
+      canvas.textBuffer.clear();
+      canvas.editingIndex = -1;
+      canvas.textEditBackedUp = false;
+    }
+    if (canvas.isTextEditing)
+      key = 0;
 
     // --- key handling: NOTE: P is handled in a single branch to avoid both
     // paste and pen activation on Shift+P
-    if (key == KEY_Y) {
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_Y) && !ctrlDown) {
       if (!canvas.selectedIndices.empty()) {
         canvas.clipboard.clear();
         for (int idx : canvas.selectedIndices) {
           if (idx >= 0 && idx < (int)canvas.elements.size())
             canvas.clipboard.push_back(canvas.elements[idx]);
         }
+        canvas.pasteOffsetIndex = 0;
       }
     }
 
-    if (key == KEY_P) {
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_P)) {
       // SHIFT+P => Paste (only if clipboard not empty)
-      if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+      if (shiftDown) {
         if (!canvas.clipboard.empty()) {
           SaveBackup(canvas);
           RestoreZOrder(canvas);
           canvas.selectedIndices.clear();
 
-          Vector2 pasteOffset = {20, 20};
+          float step = 20.0f * (canvas.pasteOffsetIndex + 1);
+          Vector2 pasteOffset = {step, step};
           for (const auto &item : canvas.clipboard) {
             Element cloned = item;
 
@@ -313,6 +363,7 @@ int main() {
             canvas.elements.push_back(cloned);
             canvas.selectedIndices.push_back((int)canvas.elements.size() - 1);
           }
+          canvas.pasteOffsetIndex++;
         }
       } else {
         // plain 'p' => PEN mode
@@ -324,13 +375,13 @@ int main() {
     }
 
     // Other mode keys
-    if (key == KEY_S) {
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_S)) {
       canvas.mode = SELECTION_MODE;
       canvas.modeText = "SELECTION";
       canvas.modeColor = MAROON;
       canvas.isTypingNumber = false;
     }
-    if (key == KEY_L) {
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_L)) {
       if (canvas.lastKey == KEY_D) {
         canvas.mode = DOTTEDLINE_MODE;
         canvas.modeText = "DOTTED LINE";
@@ -344,7 +395,7 @@ int main() {
       canvas.modeColor = BLUE;
       canvas.isTypingNumber = false;
     }
-    if (key == KEY_C) {
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_C)) {
       if (canvas.lastKey == KEY_D) {
         canvas.mode = DOTTEDCIRCLE_MODE;
         canvas.modeText = "DOTTED CIRCLE";
@@ -355,7 +406,7 @@ int main() {
       canvas.modeColor = DARKGREEN;
       canvas.isTypingNumber = false;
     }
-    if (key == KEY_R) {
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_R)) {
       if (canvas.lastKey == KEY_D) {
         canvas.mode = DOTTEDRECT_MODE;
         canvas.modeText = "DOTTED RECT";
@@ -366,15 +417,25 @@ int main() {
       canvas.modeColor = RED;
       canvas.isTypingNumber = false;
     }
-    if (key == KEY_E) {
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_E)) {
       canvas.mode = ERASER_MODE;
       canvas.modeText = "ERASER";
       canvas.modeColor = ORANGE;
       canvas.isTypingNumber = false;
     }
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_T)) {
+      canvas.mode = TEXT_MODE;
+      canvas.modeText = "TEXT";
+      canvas.modeColor = DARKBLUE;
+      canvas.isTypingNumber = false;
+      if (!canvas.isTextEditing) {
+        canvas.textBuffer.clear();
+        canvas.editingIndex = -1;
+      }
+    }
 
-    if (key == KEY_G) {
-      if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_G)) {
+      if (shiftDown) {
         // Ungroup selected group(s)
         if (!canvas.selectedIndices.empty()) {
           SaveBackup(canvas);
@@ -422,22 +483,49 @@ int main() {
       }
     }
 
-    if (key == KEY_F)
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_F))
       canvas.showTags = !canvas.showTags;
     if (key != 0)
       canvas.lastKey = key;
 
-    if (IsKeyPressed(KEY_U)) {
-      if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+    if (!canvas.isTextEditing) {
+      bool redoPressed = (IsKeyPressed(KEY_U) && shiftDown) ||
+                         (ctrlDown && IsKeyPressed(KEY_Y)) ||
+                         (ctrlDown && shiftDown && IsKeyPressed(KEY_Z));
+      bool undoPressed =
+          (!redoPressed && IsKeyPressed(KEY_U)) || (ctrlDown && IsKeyPressed(KEY_Z));
+
+      if (redoPressed) {
         if (!canvas.redoStack.empty()) {
           canvas.undoStack.push_back(canvas.elements);
           canvas.elements = canvas.redoStack.back();
           canvas.redoStack.pop_back();
+          canvas.selectedIndices.clear();
         }
-      } else if (!canvas.undoStack.empty()) {
+      } else if (undoPressed && !canvas.undoStack.empty()) {
         canvas.redoStack.push_back(canvas.elements);
         canvas.elements = canvas.undoStack.back();
         canvas.undoStack.pop_back();
+        canvas.selectedIndices.clear();
+      }
+    }
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_X)) {
+      vector<int> selectedIDs = GetSelectedIDs(canvas);
+      if (!selectedIDs.empty()) {
+        SaveBackup(canvas);
+        RestoreZOrder(canvas);
+
+        vector<int> sorted;
+        for (int id : selectedIDs) {
+          int idx = FindElementIndexByID(canvas, id);
+          if (idx != -1)
+            sorted.push_back(idx);
+        }
+        sort(sorted.begin(), sorted.end(), greater<int>());
+        for (int idx : sorted) {
+          if (idx >= 0 && idx < (int)canvas.elements.size())
+            canvas.elements.erase(canvas.elements.begin() + idx);
+        }
         canvas.selectedIndices.clear();
       }
     }
@@ -470,33 +558,50 @@ int main() {
         }
       }
 
-      if ((IsKeyPressed(KEY_J) || IsKeyPressed(KEY_K)) &&
-          !canvas.elements.empty()) {
-        int currentOrig = -1;
+      bool jPressed = IsKeyPressed(KEY_J);
+      bool kPressed = IsKeyPressed(KEY_K);
+      if ((jPressed || kPressed) && !canvas.elements.empty()) {
+        vector<int> ids;
+        ids.reserve(canvas.elements.size());
+        for (const auto &el : canvas.elements) {
+          if (el.uniqueID >= 0)
+            ids.push_back(el.uniqueID);
+        }
+        sort(ids.begin(), ids.end());
+        ids.erase(unique(ids.begin(), ids.end()), ids.end());
+        if (ids.empty())
+          continue;
+
+        int currentID = -1;
         if (!canvas.selectedIndices.empty()) {
           int selIdx = canvas.selectedIndices[0];
           if (selIdx >= 0 && selIdx < (int)canvas.elements.size())
-            currentOrig = canvas.elements[selIdx].originalIndex;
-          if (currentOrig == -1)
-            currentOrig = canvas.selectedIndices[0];
+            currentID = canvas.elements[selIdx].uniqueID;
         }
-        RestoreZOrder(canvas);
-        int nextIdx;
-        if (IsKeyPressed(KEY_J)) {
-          nextIdx = (currentOrig + 1) % (int)canvas.elements.size();
+
+        int targetID = ids[0];
+        auto zeroIt = lower_bound(ids.begin(), ids.end(), 0);
+        if (zeroIt != ids.end() && *zeroIt == 0)
+          targetID = 0;
+
+        auto it = find(ids.begin(), ids.end(), currentID);
+        if (it != ids.end()) {
+          int pos = (int)(it - ids.begin());
+          if (jPressed) {
+            pos = (pos + 1) % (int)ids.size();
+          } else {
+            pos = (pos == 0 ? (int)ids.size() - 1 : pos - 1);
+          }
+          targetID = ids[pos];
         } else {
-          nextIdx = (currentOrig <= 0 ? (int)canvas.elements.size() - 1
-                                      : currentOrig - 1);
+          if (!jPressed && zeroIt != ids.end() && *zeroIt == 0)
+            targetID = ids.back();
         }
-        if (!canvas.elements.empty()) {
-          SaveBackup(canvas);
-          Element selected = canvas.elements[nextIdx];
-          selected.originalIndex = nextIdx;
-          canvas.elements.erase(canvas.elements.begin() + nextIdx);
-          canvas.elements.push_back(selected);
-          canvas.selectedIndices = {(int)canvas.elements.size() - 1};
-          canvas.isTypingNumber = false;
-        }
+
+        int targetIdx = FindElementIndexByID(canvas, targetID);
+        if (targetIdx != -1)
+          canvas.selectedIndices = {targetIdx};
+        canvas.isTypingNumber = false;
       }
 
       if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
@@ -583,7 +688,87 @@ int main() {
                   m, {b.x - 2, b.y - 2, b.width + 4, b.height + 4})) {
             SaveBackup(canvas);
             canvas.elements.erase(canvas.elements.begin() + i);
+            canvas.selectedIndices.clear();
             break;
+          }
+        }
+      }
+    } else if (canvas.mode == TEXT_MODE) {
+      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        Vector2 m = GetMousePosition();
+        int hitIndex = -1;
+        for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
+          if (canvas.elements[i].type != TEXT_MODE)
+            continue;
+          Rectangle b = canvas.elements[i].GetBounds();
+          if (CheckCollisionPointRec(m, b)) {
+            hitIndex = i;
+            break;
+          }
+        }
+
+        if (hitIndex != -1) {
+          canvas.isTextEditing = true;
+          canvas.editingIndex = hitIndex;
+          canvas.editingOriginalText = canvas.elements[hitIndex].text;
+          canvas.textBuffer = canvas.elements[hitIndex].text;
+          canvas.textPos = canvas.elements[hitIndex].start;
+          canvas.editingColor = canvas.elements[hitIndex].color;
+          canvas.textEditBackedUp = false;
+        } else {
+          SaveBackup(canvas);
+          Element newEl;
+          newEl.type = TEXT_MODE;
+          newEl.start = m;
+          newEl.end = {m.x + 10.0f, m.y + canvas.textSize};
+          newEl.strokeWidth = canvas.strokeWidth;
+          newEl.color = canvas.modeColor;
+          newEl.originalIndex = -1;
+          newEl.uniqueID = canvas.nextElementId++;
+          newEl.text = "";
+          canvas.elements.push_back(newEl);
+
+          canvas.textPos = m;
+          canvas.isTextEditing = true;
+          canvas.editingIndex = (int)canvas.elements.size() - 1;
+          canvas.editingOriginalText.clear();
+          canvas.textBuffer.clear();
+          canvas.editingColor = canvas.modeColor;
+          canvas.textEditBackedUp = true;
+        }
+      }
+
+      if (canvas.isTextEditing) {
+        bool changed = false;
+        int ch = GetCharPressed();
+        while (ch > 0) {
+          if (ch >= 32 && ch < 127) {
+            canvas.textBuffer.push_back((char)ch);
+            changed = true;
+          }
+          ch = GetCharPressed();
+        }
+
+        if (IsKeyPressed(KEY_BACKSPACE) && !canvas.textBuffer.empty()) {
+          canvas.textBuffer.pop_back();
+          changed = true;
+        }
+
+        if (changed) {
+          if (!canvas.textEditBackedUp) {
+            SaveBackup(canvas);
+            canvas.textEditBackedUp = true;
+          }
+          if (canvas.editingIndex >= 0 &&
+              canvas.editingIndex < (int)canvas.elements.size()) {
+            Vector2 size =
+                MeasureTextEx(canvas.font, canvas.textBuffer.c_str(),
+                              canvas.textSize, 2);
+            Element &el = canvas.elements[canvas.editingIndex];
+            el.text = canvas.textBuffer;
+            el.start = canvas.textPos;
+            el.end = {canvas.textPos.x + max(10.0f, size.x),
+                      canvas.textPos.y + max(canvas.textSize, size.y)};
           }
         }
       }
@@ -591,6 +776,7 @@ int main() {
       // Drawing modes (line, rect, circle, pen,...)
       if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         canvas.startPoint = GetMousePosition();
+        canvas.currentMouse = canvas.startPoint;
         canvas.isDragging = true;
         if (canvas.mode == PEN_MODE) {
           canvas.currentPath.clear();
@@ -632,7 +818,10 @@ int main() {
     ClearBackground(WHITE);
 
     for (size_t i = 0; i < canvas.elements.size(); i++) {
-      DrawElement(canvas.elements[i]);
+      if (canvas.mode == TEXT_MODE && canvas.isTextEditing &&
+          (int)i == canvas.editingIndex)
+        continue;
+      DrawElement(canvas.elements[i], canvas.font, canvas.textSize);
       bool isSelected = false;
       for (int idx : canvas.selectedIndices)
         if (idx == (int)i)
@@ -680,11 +869,15 @@ int main() {
         preview.color = Fade(canvas.modeColor, 0.5f);
         if (canvas.mode == PEN_MODE)
           preview.path = canvas.currentPath;
-        DrawElement(preview);
+        DrawElement(preview, canvas.font, canvas.textSize);
       }
     }
     if (canvas.mode == ERASER_MODE)
       DrawCircleLinesV(GetMousePosition(), 10, ORANGE);
+    if (canvas.mode == TEXT_MODE && canvas.isTextEditing) {
+      DrawTextEx(canvas.font, canvas.textBuffer.c_str(), canvas.textPos,
+                 canvas.textSize, 2, Fade(canvas.editingColor, 0.7f));
+    }
     DrawTextEx(canvas.font, "Current Mode:", {10, 10}, 24, 2, DARKGRAY);
     DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2,
                canvas.modeColor);
