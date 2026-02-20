@@ -144,6 +144,61 @@ int FindElementIndexByID(const Canvas &canvas, int id) {
   return -1;
 }
 
+bool IsPointOnElement(const Element &el, Vector2 p, float tolerance) {
+  float tol = max(0.5f, tolerance);
+  if (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE ||
+      el.type == ARROWLINE_MODE) {
+    if (Vector2Distance(el.start, el.end) < 0.001f) {
+      return Vector2Distance(p, el.start) <= (el.strokeWidth * 0.5f + tol);
+    }
+    return CheckCollisionPointLine(p, el.start, el.end,
+                                   el.strokeWidth * 0.5f + tol);
+  }
+  if (el.type == CIRCLE_MODE || el.type == DOTTEDCIRCLE_MODE) {
+    float r = Vector2Distance(el.start, el.end);
+    float d = Vector2Distance(p, el.start);
+    return fabsf(d - r) <= (el.strokeWidth * 0.5f + tol);
+  }
+  if (el.type == RECTANGLE_MODE || el.type == DOTTEDRECT_MODE) {
+    float x0 = min(el.start.x, el.end.x);
+    float y0 = min(el.start.y, el.end.y);
+    float x1 = max(el.start.x, el.end.x);
+    float y1 = max(el.start.y, el.end.y);
+    Vector2 a = {x0, y0};
+    Vector2 b = {x1, y0};
+    Vector2 c = {x1, y1};
+    Vector2 d = {x0, y1};
+    float t = el.strokeWidth * 0.5f + tol;
+    return CheckCollisionPointLine(p, a, b, t) ||
+           CheckCollisionPointLine(p, b, c, t) ||
+           CheckCollisionPointLine(p, c, d, t) ||
+           CheckCollisionPointLine(p, d, a, t);
+  }
+  if (el.type == PEN_MODE) {
+    if (el.path.empty())
+      return false;
+    if (el.path.size() == 1)
+      return Vector2Distance(p, el.path[0]) <= (el.strokeWidth * 0.5f + tol);
+    float t = el.strokeWidth * 0.5f + tol;
+    for (size_t i = 1; i < el.path.size(); i++) {
+      if (CheckCollisionPointLine(p, el.path[i - 1], el.path[i], t))
+        return true;
+    }
+    return false;
+  }
+  if (el.type == GROUP_MODE) {
+    for (const auto &child : el.children) {
+      if (IsPointOnElement(child, p, tolerance))
+        return true;
+    }
+    return false;
+  }
+  if (el.type == TEXT_MODE) {
+    return CheckCollisionPointRec(p, el.GetBounds());
+  }
+  return false;
+}
+
 vector<int> GetSelectedIDs(const Canvas &canvas) {
   vector<int> ids;
   for (int idx : canvas.selectedIndices) {
@@ -674,13 +729,11 @@ int main() {
         canvas.isDragging = true;
         bool hit = false;
         int hitIndex = -1;
+        float hitTol = 4.0f / canvas.camera.zoom;
         for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
-          Rectangle b = canvas.elements[i].GetBounds();
           Rectangle tagHit = {canvas.elements[i].start.x,
                               canvas.elements[i].start.y - 20, 20, 20};
-          if (CheckCollisionPointRec(
-                  canvas.startPoint,
-                  {b.x - 5, b.y - 5, b.width + 10, b.height + 10}) ||
+          if (IsPointOnElement(canvas.elements[i], canvas.startPoint, hitTol) ||
               CheckCollisionPointRec(canvas.startPoint, tagHit)) {
             hitIndex = i;
             hit = true;
