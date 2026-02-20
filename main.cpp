@@ -167,11 +167,20 @@ void DrawElement(const Element &el) {
                    el.strokeWidth, el.color);
     DrawDashedLine({r.x, r.y + r.height}, {r.x, r.y}, el.strokeWidth, el.color);
   } else if (el.type == PEN_MODE) {
-    if (el.path.size() == 1)
+    int pointCount = (int)el.path.size();
+
+    if (pointCount == 1) {
       DrawCircleV(el.path[0], el.strokeWidth / 2, el.color);
-    else
-      DrawSplineCatmullRom(el.path.data(), (int)el.path.size(), el.strokeWidth,
+    }
+    // Catmull-Rom requires at least 4 points to calculate the curve
+    else if (pointCount >= 4) {
+      DrawSplineCatmullRom(el.path.data(), pointCount, el.strokeWidth,
                            el.color);
+    }
+    // Fallback for 2 or 3 points: Draw straight lines
+    else if (pointCount > 1) {
+      DrawLineStrip(el.path.data(), pointCount, el.color);
+    }
   } else if (el.type == GROUP_MODE) {
     for (const auto &child : el.children)
       DrawElement(child);
@@ -199,6 +208,10 @@ void RestoreZOrder(Canvas &canvas) {
     canvas.elements.erase(canvas.elements.begin() + idx);
   for (auto &el : selectedElements) {
     int target = el.originalIndex;
+    // Ensure target is never negative
+    if (target < 0)
+      target = 0;
+
     if (target >= (int)canvas.elements.size())
       canvas.elements.push_back(el);
     else
