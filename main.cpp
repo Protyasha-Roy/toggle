@@ -38,6 +38,7 @@ struct Canvas {
   Color modeColor;
   vector<Element> elements;
   vector<Vector2> currentPath;
+  bool showTags = false;
 };
 
 int main() {
@@ -69,6 +70,8 @@ int main() {
       canvas.mode = RECTANGLE_MODE;
     if (IsKeyPressed(KEY_P))
       canvas.mode = PEN_MODE;
+    if (IsKeyPressed(KEY_F))
+      canvas.showTags = !canvas.showTags;
 
     if (canvas.mode == LINE_MODE || canvas.mode == CIRCLE_MODE ||
         canvas.mode == RECTANGLE_MODE || canvas.mode == PEN_MODE) {
@@ -140,7 +143,9 @@ int main() {
     }
 
     // Save drawing
-    for (const Element &element : canvas.elements) {
+    for (size_t i = 0; i < canvas.elements.size(); i++) {
+      const Element &element = canvas.elements[i];
+      
       if (element.type == LINE_MODE) {
         DrawLineEx(element.start, element.end, element.strokeWidth,
                    element.color);
@@ -161,6 +166,13 @@ int main() {
                                element.strokeWidth, element.color);
         }
       }
+
+      // Tagging elements
+      if (canvas.showTags) {
+            DrawRectangle(element.start.x, element.start.y - 20, 20, 20, YELLOW);
+            DrawRectangleLines(element.start.x, element.start.y - 20, 20, 20, BLACK);
+            DrawText(TextFormat("%d", i), element.start.x + 5, element.start.y - 15, 10, BLACK);
+        }
     }
 
     DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2,
