@@ -203,6 +203,12 @@ int main() {
       canvas.modeColor = BLACK;
       canvas.isTypingNumber = false;
     }
+    if (key == KEY_E) {
+      canvas.mode = ERASER_MODE;
+      canvas.modeText = "ERASER";
+      canvas.modeColor = ORANGE;
+      canvas.isTypingNumber = false;
+    }
     if (key == KEY_F)
       canvas.showTags = !canvas.showTags;
     if (key != 0)
@@ -345,6 +351,19 @@ int main() {
         canvas.isDragging = false;
         canvas.isBoxSelecting = false;
       }
+    } else if (canvas.mode == ERASER_MODE) {
+      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+        Vector2 m = GetMousePosition();
+        for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
+          Rectangle b = canvas.elements[i].GetBounds();
+          if (CheckCollisionPointRec(
+                  m, {b.x - 2, b.y - 2, b.width + 4, b.height + 4})) {
+            SaveBackup(canvas);
+            canvas.elements.erase(canvas.elements.begin() + i);
+            break;
+          }
+        }
+      }
     } else {
       if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         canvas.startPoint = GetMousePosition();
@@ -441,7 +460,7 @@ int main() {
                          abs(canvas.currentMouse.y - canvas.startPoint.y)};
         DrawRectangleRec(box, Fade(BLUE, 0.2f));
         DrawRectangleLinesEx(box, 1, BLUE);
-      } else if (canvas.mode != SELECTION_MODE) {
+      } else if (canvas.mode != SELECTION_MODE && canvas.mode != ERASER_MODE) {
         Vector2 m = GetMousePosition();
         if (canvas.mode == LINE_MODE)
           DrawLineEx(canvas.startPoint, m, canvas.strokeWidth,
@@ -484,6 +503,9 @@ int main() {
                                (int)canvas.currentPath.size(),
                                canvas.strokeWidth, canvas.modeColor);
       }
+    }
+    if (canvas.mode == ERASER_MODE) {
+      DrawCircleLinesV(GetMousePosition(), 10, ORANGE);
     }
     DrawTextEx(canvas.font, "Current Mode:", {10, 10}, 24, 2, DARKGRAY);
     DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2,
