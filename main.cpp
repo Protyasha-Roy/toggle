@@ -17,6 +17,7 @@ enum Mode {
   TEXT_MODE,
   ERASER_MODE,
   PEN_MODE,
+  GROUP_MODE,
 };
 
 struct Element {
@@ -27,10 +28,24 @@ struct Element {
   Color color;
   vector<Vector2> path;
   int originalIndex = -1;
+  vector<Element> children;
 
   Rectangle GetBounds() const {
     float minX, minY, maxX, maxY;
-    if (type == PEN_MODE && !path.empty()) {
+    if (type == GROUP_MODE && !children.empty()) {
+      Rectangle b = children[0].GetBounds();
+      minX = b.x;
+      minY = b.y;
+      maxX = b.x + b.width;
+      maxY = b.y + b.height;
+      for (const auto &child : children) {
+        Rectangle cb = child.GetBounds();
+        minX = min(minX, cb.x);
+        minY = min(minY, cb.y);
+        maxX = max(maxX, cb.x + cb.width);
+        maxY = max(maxY, cb.y + cb.height);
+      }
+    } else if (type == PEN_MODE && !path.empty()) {
       minX = maxX = path[0].x;
       minY = maxY = path[0].y;
       for (auto &p : path) {
@@ -123,6 +138,55 @@ void DrawDashedRing(Vector2 center, float radius, float width, Color color) {
   }
 }
 
+void DrawElement(const Element &el) {
+  if (el.type == LINE_MODE)
+    DrawLineEx(el.start, el.end, el.strokeWidth, el.color);
+  else if (el.type == DOTTEDLINE_MODE)
+    DrawDashedLine(el.start, el.end, el.strokeWidth, el.color);
+  else if (el.type == ARROWLINE_MODE)
+    DrawArrowLine(el.start, el.end, el.strokeWidth, el.color);
+  else if (el.type == CIRCLE_MODE)
+    DrawRing(el.start, Vector2Distance(el.start, el.end) - el.strokeWidth / 2,
+             Vector2Distance(el.start, el.end) + el.strokeWidth / 2, 0, 360, 60,
+             el.color);
+  else if (el.type == DOTTEDCIRCLE_MODE)
+    DrawDashedRing(el.start, Vector2Distance(el.start, el.end), el.strokeWidth,
+                   el.color);
+  else if (el.type == RECTANGLE_MODE)
+    DrawRectangleLinesEx({min(el.start.x, el.end.x), min(el.start.y, el.end.y),
+                          abs(el.end.x - el.start.x),
+                          abs(el.end.y - el.start.y)},
+                         el.strokeWidth, el.color);
+  else if (el.type == DOTTEDRECT_MODE) {
+    Rectangle r = {min(el.start.x, el.end.x), min(el.start.y, el.end.y),
+                   abs(el.end.x - el.start.x), abs(el.end.y - el.start.y)};
+    DrawDashedLine({r.x, r.y}, {r.x + r.width, r.y}, el.strokeWidth, el.color);
+    DrawDashedLine({r.x + r.width, r.y}, {r.x + r.width, r.y + r.height},
+                   el.strokeWidth, el.color);
+    DrawDashedLine({r.x + r.width, r.y + r.height}, {r.x, r.y + r.height},
+                   el.strokeWidth, el.color);
+    DrawDashedLine({r.x, r.y + r.height}, {r.x, r.y}, el.strokeWidth, el.color);
+  } else if (el.type == PEN_MODE) {
+    if (el.path.size() == 1)
+      DrawCircleV(el.path[0], el.strokeWidth / 2, el.color);
+    else
+      DrawSplineCatmullRom(el.path.data(), (int)el.path.size(), el.strokeWidth,
+                           el.color);
+  } else if (el.type == GROUP_MODE) {
+    for (const auto &child : el.children)
+      DrawElement(child);
+  }
+}
+
+void MoveElement(Element &el, Vector2 delta) {
+  el.start = Vector2Add(el.start, delta);
+  el.end = Vector2Add(el.end, delta);
+  for (auto &p : el.path)
+    p = Vector2Add(p, delta);
+  for (auto &child : el.children)
+    MoveElement(child, delta);
+}
+
 void RestoreZOrder(Canvas &canvas) {
   if (canvas.selectedIndices.empty())
     return;
@@ -208,6 +272,37 @@ int main() {
       canvas.modeText = "ERASER";
       canvas.modeColor = ORANGE;
       canvas.isTypingNumber = false;
+    }
+    if (key == KEY_G) {
+      if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
+        if (!canvas.selectedIndices.empty()) {
+          SaveBackup(canvas);
+          vector<int> sorted = canvas.selectedIndices;
+          sort(sorted.begin(), sorted.end(), greater<int>());
+          for (int idx : sorted) {
+            if (canvas.elements[idx].type == GROUP_MODE) {
+              Element g = canvas.elements[idx];
+              canvas.elements.erase(canvas.elements.begin() + idx);
+              for (auto &child : g.children)
+                canvas.elements.push_back(child);
+            }
+          }
+          canvas.selectedIndices.clear();
+        }
+      } else if (canvas.selectedIndices.size() > 1) {
+        SaveBackup(canvas);
+        Element group = {GROUP_MODE};
+        vector<int> sorted = canvas.selectedIndices;
+        sort(sorted.begin(), sorted.end(), greater<int>());
+        for (int idx : sorted) {
+          group.children.push_back(canvas.elements[idx]);
+          canvas.elements.erase(canvas.elements.begin() + idx);
+        }
+        Rectangle gb = group.GetBounds();
+        group.start = {gb.x, gb.y};
+        canvas.elements.push_back(group);
+        canvas.selectedIndices = {(int)canvas.elements.size() - 1};
+      }
     }
     if (key == KEY_F)
       canvas.showTags = !canvas.showTags;
@@ -336,11 +431,7 @@ int main() {
                    (delta.x != 0 || delta.y != 0)) {
           canvas.hasMoved = true;
           for (int idx : canvas.selectedIndices) {
-            Element &el = canvas.elements[idx];
-            el.start = Vector2Add(el.start, delta);
-            el.end = Vector2Add(el.end, delta);
-            for (auto &p : el.path)
-              p = Vector2Add(p, delta);
+            MoveElement(canvas.elements[idx], delta);
           }
         }
       }
@@ -397,59 +488,26 @@ int main() {
     BeginDrawing();
     ClearBackground(WHITE);
     for (size_t i = 0; i < canvas.elements.size(); i++) {
-      const Element &el = canvas.elements[i];
-      if (el.type == LINE_MODE)
-        DrawLineEx(el.start, el.end, el.strokeWidth, el.color);
-      else if (el.type == DOTTEDLINE_MODE)
-        DrawDashedLine(el.start, el.end, el.strokeWidth, el.color);
-      else if (el.type == ARROWLINE_MODE)
-        DrawArrowLine(el.start, el.end, el.strokeWidth, el.color);
-      else if (el.type == CIRCLE_MODE)
-        DrawRing(el.start,
-                 Vector2Distance(el.start, el.end) - el.strokeWidth / 2,
-                 Vector2Distance(el.start, el.end) + el.strokeWidth / 2, 0, 360,
-                 60, el.color);
-      else if (el.type == DOTTEDCIRCLE_MODE)
-        DrawDashedRing(el.start, Vector2Distance(el.start, el.end),
-                       el.strokeWidth, el.color);
-      else if (el.type == RECTANGLE_MODE)
-        DrawRectangleLinesEx(
-            {min(el.start.x, el.end.x), min(el.start.y, el.end.y),
-             abs(el.end.x - el.start.x), abs(el.end.y - el.start.y)},
-            el.strokeWidth, el.color);
-      else if (el.type == DOTTEDRECT_MODE) {
-        Rectangle r = {min(el.start.x, el.end.x), min(el.start.y, el.end.y),
-                       abs(el.end.x - el.start.x), abs(el.end.y - el.start.y)};
-        DrawDashedLine({r.x, r.y}, {r.x + r.width, r.y}, el.strokeWidth,
-                       el.color);
-        DrawDashedLine({r.x + r.width, r.y}, {r.x + r.width, r.y + r.height},
-                       el.strokeWidth, el.color);
-        DrawDashedLine({r.x + r.width, r.y + r.height}, {r.x, r.y + r.height},
-                       el.strokeWidth, el.color);
-        DrawDashedLine({r.x, r.y + r.height}, {r.x, r.y}, el.strokeWidth,
-                       el.color);
-      } else if (el.type == PEN_MODE) {
-        if (el.path.size() == 1)
-          DrawCircleV(el.path[0], el.strokeWidth / 2, el.color);
-        else
-          DrawSplineCatmullRom(el.path.data(), (int)el.path.size(),
-                               el.strokeWidth, el.color);
-      }
+      DrawElement(canvas.elements[i]);
       bool isSelected = false;
       for (int idx : canvas.selectedIndices)
         if (idx == (int)i)
           isSelected = true;
       if (canvas.mode == SELECTION_MODE && isSelected) {
-        Rectangle b = el.GetBounds();
+        Rectangle b = canvas.elements[i].GetBounds();
         DrawRectangleLinesEx({b.x - 5, b.y - 5, b.width + 10, b.height + 10}, 2,
                              MAGENTA);
       }
       if (canvas.showTags) {
-        int displayIndex = (el.originalIndex != -1) ? el.originalIndex : (int)i;
-        DrawRectangle(el.start.x, el.start.y - 20, 20, 20, YELLOW);
-        DrawRectangleLines(el.start.x, el.start.y - 20, 20, 20, BLACK);
-        DrawText(TextFormat("%d", displayIndex), el.start.x + 5,
-                 el.start.y - 15, 10, BLACK);
+        int displayIndex = (canvas.elements[i].originalIndex != -1)
+                               ? canvas.elements[i].originalIndex
+                               : (int)i;
+        DrawRectangle(canvas.elements[i].start.x,
+                      canvas.elements[i].start.y - 20, 20, 20, YELLOW);
+        DrawRectangleLines(canvas.elements[i].start.x,
+                           canvas.elements[i].start.y - 20, 20, 20, BLACK);
+        DrawText(TextFormat("%d", displayIndex), canvas.elements[i].start.x + 5,
+                 canvas.elements[i].start.y - 15, 10, BLACK);
       }
     }
     if (canvas.isDragging) {
@@ -462,51 +520,15 @@ int main() {
         DrawRectangleLinesEx(box, 1, BLUE);
       } else if (canvas.mode != SELECTION_MODE && canvas.mode != ERASER_MODE) {
         Vector2 m = GetMousePosition();
-        if (canvas.mode == LINE_MODE)
-          DrawLineEx(canvas.startPoint, m, canvas.strokeWidth,
-                     Fade(canvas.modeColor, 0.5f));
-        else if (canvas.mode == DOTTEDLINE_MODE)
-          DrawDashedLine(canvas.startPoint, m, canvas.strokeWidth,
-                         Fade(canvas.modeColor, 0.5f));
-        else if (canvas.mode == ARROWLINE_MODE)
-          DrawArrowLine(canvas.startPoint, m, canvas.strokeWidth,
-                        Fade(canvas.modeColor, 0.5f));
-        else if (canvas.mode == CIRCLE_MODE)
-          DrawRing(
-              canvas.startPoint,
-              Vector2Distance(canvas.startPoint, m) - canvas.strokeWidth / 2,
-              Vector2Distance(canvas.startPoint, m) + canvas.strokeWidth / 2, 0,
-              360, 60, Fade(canvas.modeColor, 0.5f));
-        else if (canvas.mode == DOTTEDCIRCLE_MODE)
-          DrawDashedRing(canvas.startPoint,
-                         Vector2Distance(canvas.startPoint, m),
-                         canvas.strokeWidth, Fade(canvas.modeColor, 0.5f));
-        else if (canvas.mode == RECTANGLE_MODE)
-          DrawRectangleLinesEx(
-              {min(canvas.startPoint.x, m.x), min(canvas.startPoint.y, m.y),
-               abs(m.x - canvas.startPoint.x), abs(m.y - canvas.startPoint.y)},
-              canvas.strokeWidth, Fade(canvas.modeColor, 0.5f));
-        else if (canvas.mode == DOTTEDRECT_MODE) {
-          Rectangle r = {
-              min(canvas.startPoint.x, m.x), min(canvas.startPoint.y, m.y),
-              abs(m.x - canvas.startPoint.x), abs(m.y - canvas.startPoint.y)};
-          DrawDashedLine({r.x, r.y}, {r.x + r.width, r.y}, canvas.strokeWidth,
-                         Fade(canvas.modeColor, 0.5f));
-          DrawDashedLine({r.x + r.width, r.y}, {r.x + r.width, r.y + r.height},
-                         canvas.strokeWidth, Fade(canvas.modeColor, 0.5f));
-          DrawDashedLine({r.x + r.width, r.y + r.height}, {r.x, r.y + r.height},
-                         canvas.strokeWidth, Fade(canvas.modeColor, 0.5f));
-          DrawDashedLine({r.x, r.y + r.height}, {r.x, r.y}, canvas.strokeWidth,
-                         Fade(canvas.modeColor, 0.5f));
-        } else if (canvas.mode == PEN_MODE && canvas.currentPath.size() > 1)
-          DrawSplineCatmullRom(canvas.currentPath.data(),
-                               (int)canvas.currentPath.size(),
-                               canvas.strokeWidth, canvas.modeColor);
+        Element preview = {canvas.mode, canvas.startPoint, m,
+                           canvas.strokeWidth, Fade(canvas.modeColor, 0.5f)};
+        if (canvas.mode == PEN_MODE)
+          preview.path = canvas.currentPath;
+        DrawElement(preview);
       }
     }
-    if (canvas.mode == ERASER_MODE) {
+    if (canvas.mode == ERASER_MODE)
       DrawCircleLinesV(GetMousePosition(), 10, ORANGE);
-    }
     DrawTextEx(canvas.font, "Current Mode:", {10, 10}, 24, 2, DARKGRAY);
     DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2,
                canvas.modeColor);
