@@ -145,7 +145,7 @@ int main() {
     // Save drawing
     for (size_t i = 0; i < canvas.elements.size(); i++) {
       const Element &element = canvas.elements[i];
-      
+
       if (element.type == LINE_MODE) {
         DrawLineEx(element.start, element.end, element.strokeWidth,
                    element.color);
@@ -161,7 +161,9 @@ int main() {
         DrawRectangleLinesEx({x, y, width, height}, element.strokeWidth,
                              element.color);
       } else if (element.type == PEN_MODE) {
-        if (element.path.size() > 1) {
+        if (element.path.size() == 1) {
+          DrawCircleV(element.path[0], element.strokeWidth / 2, element.color);
+        } else if (element.path.size() > 1) {
           DrawSplineCatmullRom(element.path.data(), element.path.size(),
                                element.strokeWidth, element.color);
         }
@@ -169,10 +171,12 @@ int main() {
 
       // Tagging elements
       if (canvas.showTags) {
-            DrawRectangle(element.start.x, element.start.y - 20, 20, 20, YELLOW);
-            DrawRectangleLines(element.start.x, element.start.y - 20, 20, 20, BLACK);
-            DrawText(TextFormat("%d", i), element.start.x + 5, element.start.y - 15, 10, BLACK);
-        }
+        DrawRectangle(element.start.x, element.start.y - 20, 20, 20, YELLOW);
+        DrawRectangleLines(element.start.x, element.start.y - 20, 20, 20,
+                           BLACK);
+        DrawText(TextFormat("%d", i), element.start.x + 5, element.start.y - 15,
+                 10, BLACK);
+      }
     }
 
     DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2,
