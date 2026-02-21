@@ -7,6 +7,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -30,6 +31,58 @@ enum Mode {
 
 enum BackgroundType { BG_BLANK, BG_GRID, BG_DOTTED };
 
+struct KeyBinding {
+  int key = KEY_NULL;
+  bool shift = false;
+  bool ctrl = false;
+  bool alt = false;
+};
+
+struct AppConfig {
+  string configPath = "config/toggle.conf";
+  int windowWidth = 1000;
+  int windowHeight = 800;
+  int targetFps = 60;
+  int minWindowWidth = 320;
+  int minWindowHeight = 240;
+  string windowTitle = "Toggle : no more toggling";
+  string defaultFontPath = "IosevkaNerdFontMono-Regular.ttf";
+  int fontAtlasSize = 96;
+  bool defaultDarkTheme = false;
+  bool defaultShowTags = false;
+  float defaultStrokeWidth = 2.0f;
+  float minStrokeWidth = 1.0f;
+  float maxStrokeWidth = 50.0f;
+  float defaultTextSize = 24.0f;
+  float minTextSize = 6.0f;
+  float maxTextSize = 200.0f;
+  float defaultGridWidth = 24.0f;
+  float minZoom = 0.1f;
+  float maxZoom = 10.0f;
+  float zoomStep = 0.1f;
+  float zoomKeyScale = 1.1f;
+  float penSampleDistance = 2.0f;
+  float selectionBoxActivationPx = 6.0f;
+  float defaultHitTolerance = 2.0f;
+  float statusDurationSeconds = 2.0f;
+  float pasteOffsetStep = 20.0f;
+  BackgroundType defaultBgType = BG_BLANK;
+  Color defaultDrawColor = BLACK;
+  Color lightBackground = WHITE;
+  Color darkBackground = {24, 26, 31, 255};
+  Color lightUiText = DARKGRAY;
+  Color darkUiText = {220, 222, 228, 255};
+  Color modeSelection = MAROON;
+  Color modeMove = DARKBROWN;
+  Color modeLine = BLUE;
+  Color modeCircle = DARKGREEN;
+  Color modeRect = RED;
+  Color modeTextColor = DARKBLUE;
+  Color modeEraser = ORANGE;
+  Color modePen = BLACK;
+  unordered_map<string, vector<KeyBinding>> keymap;
+};
+
 struct Element {
   Mode type;
   Vector2 start;
@@ -41,6 +94,7 @@ struct Element {
   int uniqueID = -1;
   vector<Element> children;
   string text;
+  float textSize = 24.0f;
 
   Rectangle GetBounds() const {
     float minX, minY, maxX, maxY;
@@ -118,6 +172,7 @@ struct Canvas {
   int editingIndex = -1;
   string editingOriginalText;
   Color editingColor = BLACK;
+  float editingTextSize = 24.0f;
   bool textEditBackedUp = false;
   double lastClickTime = 0.0;
   Vector2 lastClickPos = {0};
@@ -140,6 +195,8 @@ struct Canvas {
 };
 
 void RestoreZOrder(Canvas &canvas);
+bool ParseHexColor(string hex, Color &outColor);
+string ColorToHex(Color c);
 
 void SaveBackup(Canvas &canvas) {
   canvas.undoStack.push_back(canvas.elements);
@@ -418,8 +475,48 @@ void DrawElement(const Element &el, const Font &font, float textSize) {
     for (const auto &child : el.children)
       DrawElement(child, font, textSize);
   } else if (el.type == TEXT_MODE) {
-    DrawTextEx(font, el.text.c_str(), el.start, textSize, 2, el.color);
+    float size = (el.textSize > 0.0f) ? el.textSize : textSize;
+    DrawTextEx(font, el.text.c_str(), el.start, size, 2, el.color);
   }
+}
+
+void UpdateTextBounds(Element &el, const Font &font, float fallbackTextSize) {
+  if (el.type != TEXT_MODE)
+    return;
+  float size = (el.textSize > 0.0f) ? el.textSize : fallbackTextSize;
+  Vector2 measured = MeasureTextEx(font, el.text.c_str(), size, 2);
+  el.end = {el.start.x + max(10.0f, measured.x), el.start.y + max(size, measured.y)};
+}
+
+void ApplyColorRecursive(Element &el, Color c) {
+  el.color = c;
+  for (auto &child : el.children)
+    ApplyColorRecursive(child, c);
+}
+
+void ApplyStrokeRecursive(Element &el, float width) {
+  if (el.type != TEXT_MODE)
+    el.strokeWidth = width;
+  for (auto &child : el.children)
+    ApplyStrokeRecursive(child, width);
+}
+
+void ApplyTextSizeRecursive(Element &el, float size, const Font &font,
+                            float fallbackTextSize) {
+  if (el.type == TEXT_MODE) {
+    el.textSize = size;
+    UpdateTextBounds(el, font, fallbackTextSize);
+  }
+  for (auto &child : el.children)
+    ApplyTextSizeRecursive(child, size, font, fallbackTextSize);
+}
+
+void RecomputeTextBoundsRecursive(Element &el, const Font &font,
+                                  float fallbackTextSize) {
+  if (el.type == TEXT_MODE)
+    UpdateTextBounds(el, font, fallbackTextSize);
+  for (auto &child : el.children)
+    RecomputeTextBoundsRecursive(child, font, fallbackTextSize);
 }
 
 void MoveElement(Element &el, Vector2 delta) {
@@ -472,6 +569,15 @@ void RestoreZOrder(Canvas &canvas) {
   canvas.selectedIndices.clear();
 }
 
+vector<string> Split(const string &s, char sep) {
+  vector<string> parts;
+  string part;
+  stringstream ss(s);
+  while (getline(ss, part, sep))
+    parts.push_back(part);
+  return parts;
+}
+
 string Trim(const string &s) {
   size_t begin = s.find_first_not_of(" \t\r\n");
   if (begin == string::npos)
@@ -484,6 +590,31 @@ string ToLower(string s) {
   for (char &c : s)
     c = (char)tolower((unsigned char)c);
   return s;
+}
+
+string BackgroundTypeToString(BackgroundType t) {
+  if (t == BG_GRID)
+    return "grid";
+  if (t == BG_DOTTED)
+    return "dotted";
+  return "blank";
+}
+
+bool ParseBackgroundType(const string &s, BackgroundType &out) {
+  string v = ToLower(Trim(s));
+  if (v == "blank") {
+    out = BG_BLANK;
+    return true;
+  }
+  if (v == "grid") {
+    out = BG_GRID;
+    return true;
+  }
+  if (v == "dotted") {
+    out = BG_DOTTED;
+    return true;
+  }
+  return false;
 }
 
 bool ParsePositiveFloat(const string &s, float &value) {
@@ -503,6 +634,367 @@ bool ParseIntValue(const string &s, int &value) {
     return false;
   value = (int)v;
   return true;
+}
+
+bool ParseBool(const string &s, bool &value) {
+  string v = ToLower(Trim(s));
+  if (v == "1" || v == "true" || v == "yes" || v == "on") {
+    value = true;
+    return true;
+  }
+  if (v == "0" || v == "false" || v == "no" || v == "off") {
+    value = false;
+    return true;
+  }
+  return false;
+}
+
+int KeyFromToken(const string &token) {
+  string k = ToLower(Trim(token));
+  if (k.size() == 1) {
+    char c = k[0];
+    if (c >= 'a' && c <= 'z')
+      return KEY_A + (c - 'a');
+    if (c >= '0' && c <= '9')
+      return KEY_ZERO + (c - '0');
+  }
+  if (k == "escape" || k == "esc")
+    return KEY_ESCAPE;
+  if (k == "enter" || k == "return")
+    return KEY_ENTER;
+  if (k == "backspace")
+    return KEY_BACKSPACE;
+  if (k == "space")
+    return KEY_SPACE;
+  if (k == "tab")
+    return KEY_TAB;
+  if (k == "semicolon" || k == ";")
+    return KEY_SEMICOLON;
+  if (k == "minus" || k == "-")
+    return KEY_MINUS;
+  if (k == "equal" || k == "=")
+    return KEY_EQUAL;
+  if (k == "left_bracket" || k == "[")
+    return KEY_LEFT_BRACKET;
+  if (k == "right_bracket" || k == "]")
+    return KEY_RIGHT_BRACKET;
+  if (k == "kp_add")
+    return KEY_KP_ADD;
+  if (k == "kp_subtract")
+    return KEY_KP_SUBTRACT;
+  return KEY_NULL;
+}
+
+string KeyToToken(int key) {
+  if (key >= KEY_A && key <= KEY_Z) {
+    char c = (char)('A' + (key - KEY_A));
+    return string(1, c);
+  }
+  if (key >= KEY_ZERO && key <= KEY_NINE) {
+    char c = (char)('0' + (key - KEY_ZERO));
+    return string(1, c);
+  }
+  if (key == KEY_ESCAPE)
+    return "Escape";
+  if (key == KEY_ENTER)
+    return "Enter";
+  if (key == KEY_BACKSPACE)
+    return "Backspace";
+  if (key == KEY_SPACE)
+    return "Space";
+  if (key == KEY_TAB)
+    return "Tab";
+  if (key == KEY_SEMICOLON)
+    return "Semicolon";
+  if (key == KEY_MINUS)
+    return "Minus";
+  if (key == KEY_EQUAL)
+    return "Equal";
+  if (key == KEY_LEFT_BRACKET)
+    return "Left_Bracket";
+  if (key == KEY_RIGHT_BRACKET)
+    return "Right_Bracket";
+  if (key == KEY_KP_ADD)
+    return "Kp_Add";
+  if (key == KEY_KP_SUBTRACT)
+    return "Kp_Subtract";
+  return "Unknown";
+}
+
+bool ParseKeyBinding(const string &raw, KeyBinding &binding) {
+  binding = {};
+  vector<string> tokens = Split(raw, '+');
+  if (tokens.empty())
+    return false;
+  for (string t : tokens) {
+    t = ToLower(Trim(t));
+    if (t.empty())
+      continue;
+    if (t == "shift")
+      binding.shift = true;
+    else if (t == "ctrl" || t == "control")
+      binding.ctrl = true;
+    else if (t == "alt")
+      binding.alt = true;
+    else {
+      int k = KeyFromToken(t);
+      if (k == KEY_NULL)
+        return false;
+      binding.key = k;
+    }
+  }
+  return binding.key != KEY_NULL;
+}
+
+vector<KeyBinding> ParseBindingList(const string &raw) {
+  vector<KeyBinding> out;
+  for (const string &entry : Split(raw, '|')) {
+    KeyBinding b;
+    if (ParseKeyBinding(entry, b))
+      out.push_back(b);
+  }
+  return out;
+}
+
+bool IsBindingPressed(const KeyBinding &b, bool shiftDown, bool ctrlDown,
+                     bool altDown) {
+  if (b.key == KEY_NULL || !IsKeyPressed(b.key))
+    return false;
+  return (b.shift == shiftDown) && (b.ctrl == ctrlDown) && (b.alt == altDown);
+}
+
+bool IsActionPressed(const AppConfig &cfg, const string &action, bool shiftDown,
+                     bool ctrlDown, bool altDown) {
+  auto it = cfg.keymap.find(action);
+  if (it == cfg.keymap.end())
+    return false;
+  for (const auto &binding : it->second) {
+    if (IsBindingPressed(binding, shiftDown, ctrlDown, altDown))
+      return true;
+  }
+  return false;
+}
+
+int PrimaryKeyForAction(const AppConfig &cfg, const string &action) {
+  auto it = cfg.keymap.find(action);
+  if (it == cfg.keymap.end() || it->second.empty())
+    return KEY_NULL;
+  return it->second[0].key;
+}
+
+void AddDefaultBinding(AppConfig &cfg, const string &action,
+                       const string &bindingSpec) {
+  cfg.keymap[action] = ParseBindingList(bindingSpec);
+}
+
+void SetDefaultKeymap(AppConfig &cfg) {
+  AddDefaultBinding(cfg, "open_command_mode", "Shift+Semicolon");
+  AddDefaultBinding(cfg, "zoom_in", "Shift+Equal|Kp_Add");
+  AddDefaultBinding(cfg, "zoom_out", "Shift+Minus|Kp_Subtract");
+  AddDefaultBinding(cfg, "stroke_inc", "Equal");
+  AddDefaultBinding(cfg, "stroke_dec", "Minus");
+  AddDefaultBinding(cfg, "copy", "Y");
+  AddDefaultBinding(cfg, "paste", "Shift+P");
+  AddDefaultBinding(cfg, "mode_pen", "P");
+  AddDefaultBinding(cfg, "mode_selection", "S");
+  AddDefaultBinding(cfg, "mode_move", "M");
+  AddDefaultBinding(cfg, "mode_line_base", "L");
+  AddDefaultBinding(cfg, "mode_circle_base", "C");
+  AddDefaultBinding(cfg, "mode_rect_base", "R");
+  AddDefaultBinding(cfg, "prefix_dotted", "D");
+  AddDefaultBinding(cfg, "prefix_arrow", "A");
+  AddDefaultBinding(cfg, "mode_eraser", "E");
+  AddDefaultBinding(cfg, "mode_text", "T");
+  AddDefaultBinding(cfg, "group_toggle", "G");
+  AddDefaultBinding(cfg, "toggle_tags", "F");
+  AddDefaultBinding(cfg, "undo", "U|Ctrl+Z");
+  AddDefaultBinding(cfg, "redo", "Shift+U|Ctrl+Y|Ctrl+Shift+Z");
+  AddDefaultBinding(cfg, "delete_selection", "X");
+  AddDefaultBinding(cfg, "z_backward", "Left_Bracket");
+  AddDefaultBinding(cfg, "z_forward", "Right_Bracket");
+  AddDefaultBinding(cfg, "select_next_tag", "J");
+  AddDefaultBinding(cfg, "select_prev_tag", "K");
+}
+
+void WriteDefaultConfig(const AppConfig &cfg) {
+  ofstream out(cfg.configPath);
+  if (!out.is_open())
+    return;
+  out << "# Toggle config\n";
+  out << "window.width=" << cfg.windowWidth << "\n";
+  out << "window.height=" << cfg.windowHeight << "\n";
+  out << "window.min_width=" << cfg.minWindowWidth << "\n";
+  out << "window.min_height=" << cfg.minWindowHeight << "\n";
+  out << "window.title=" << cfg.windowTitle << "\n";
+  out << "app.target_fps=" << cfg.targetFps << "\n";
+  out << "app.status_seconds=" << cfg.statusDurationSeconds << "\n";
+  out << "font.default_path=" << cfg.defaultFontPath << "\n";
+  out << "font.atlas_size=" << cfg.fontAtlasSize << "\n";
+  out << "canvas.theme_dark=" << (cfg.defaultDarkTheme ? "true" : "false") << "\n";
+  out << "canvas.show_tags=" << (cfg.defaultShowTags ? "true" : "false") << "\n";
+  out << "canvas.stroke_width=" << cfg.defaultStrokeWidth << "\n";
+  out << "canvas.min_stroke_width=" << cfg.minStrokeWidth << "\n";
+  out << "canvas.max_stroke_width=" << cfg.maxStrokeWidth << "\n";
+  out << "canvas.text_size=" << cfg.defaultTextSize << "\n";
+  out << "canvas.min_text_size=" << cfg.minTextSize << "\n";
+  out << "canvas.max_text_size=" << cfg.maxTextSize << "\n";
+  out << "canvas.grid_width=" << cfg.defaultGridWidth << "\n";
+  out << "canvas.type=" << BackgroundTypeToString(cfg.defaultBgType) << "\n";
+  out << "canvas.draw_color=" << ColorToHex(cfg.defaultDrawColor) << "\n";
+  out << "zoom.min=" << cfg.minZoom << "\n";
+  out << "zoom.max=" << cfg.maxZoom << "\n";
+  out << "zoom.wheel_step=" << cfg.zoomStep << "\n";
+  out << "zoom.key_scale=" << cfg.zoomKeyScale << "\n";
+  out << "interaction.pen_sample_distance=" << cfg.penSampleDistance << "\n";
+  out << "interaction.selection_box_activation_px="
+      << cfg.selectionBoxActivationPx << "\n";
+  out << "interaction.hit_tolerance=" << cfg.defaultHitTolerance << "\n";
+  out << "interaction.paste_offset_step=" << cfg.pasteOffsetStep << "\n";
+  out << "theme.light.background=" << ColorToHex(cfg.lightBackground) << "\n";
+  out << "theme.dark.background=" << ColorToHex(cfg.darkBackground) << "\n";
+  out << "theme.light.ui_text=" << ColorToHex(cfg.lightUiText) << "\n";
+  out << "theme.dark.ui_text=" << ColorToHex(cfg.darkUiText) << "\n";
+  out << "mode_color.selection=" << ColorToHex(cfg.modeSelection) << "\n";
+  out << "mode_color.move=" << ColorToHex(cfg.modeMove) << "\n";
+  out << "mode_color.line=" << ColorToHex(cfg.modeLine) << "\n";
+  out << "mode_color.circle=" << ColorToHex(cfg.modeCircle) << "\n";
+  out << "mode_color.rect=" << ColorToHex(cfg.modeRect) << "\n";
+  out << "mode_color.text=" << ColorToHex(cfg.modeTextColor) << "\n";
+  out << "mode_color.eraser=" << ColorToHex(cfg.modeEraser) << "\n";
+  out << "mode_color.pen=" << ColorToHex(cfg.modePen) << "\n";
+  for (const auto &kv : cfg.keymap) {
+    out << "key." << kv.first << "=";
+    for (size_t i = 0; i < kv.second.size(); i++) {
+      const auto &b = kv.second[i];
+      if (i > 0)
+        out << "|";
+      if (b.ctrl)
+        out << "Ctrl+";
+      if (b.shift)
+        out << "Shift+";
+      if (b.alt)
+        out << "Alt+";
+      out << KeyToToken(b.key);
+    }
+    out << "\n";
+  }
+}
+
+void LoadConfig(AppConfig &cfg) {
+  ifstream in(cfg.configPath);
+  if (!in.is_open()) {
+    WriteDefaultConfig(cfg);
+    return;
+  }
+
+  string line;
+  while (getline(in, line)) {
+    line = Trim(line);
+    if (line.empty() || line[0] == '#')
+      continue;
+    size_t eq = line.find('=');
+    if (eq == string::npos)
+      continue;
+    string key = Trim(line.substr(0, eq));
+    string value = Trim(line.substr(eq + 1));
+
+    int iv;
+    float fv;
+    bool bv;
+    Color cv;
+    if (key == "window.width" && ParseIntValue(value, iv))
+      cfg.windowWidth = max(320, iv);
+    else if (key == "window.height" && ParseIntValue(value, iv))
+      cfg.windowHeight = max(240, iv);
+    else if (key == "window.min_width" && ParseIntValue(value, iv))
+      cfg.minWindowWidth = max(200, iv);
+    else if (key == "window.min_height" && ParseIntValue(value, iv))
+      cfg.minWindowHeight = max(150, iv);
+    else if (key == "window.title")
+      cfg.windowTitle = value;
+    else if (key == "app.target_fps" && ParseIntValue(value, iv))
+      cfg.targetFps = max(1, iv);
+    else if (key == "app.status_seconds" && ParsePositiveFloat(value, fv))
+      cfg.statusDurationSeconds = max(0.2f, fv);
+    else if (key == "font.default_path")
+      cfg.defaultFontPath = value;
+    else if (key == "font.atlas_size" && ParseIntValue(value, iv))
+      cfg.fontAtlasSize = max(16, iv);
+    else if (key == "canvas.theme_dark" && ParseBool(value, bv))
+      cfg.defaultDarkTheme = bv;
+    else if (key == "canvas.show_tags" && ParseBool(value, bv))
+      cfg.defaultShowTags = bv;
+    else if (key == "canvas.stroke_width" && ParsePositiveFloat(value, fv))
+      cfg.defaultStrokeWidth = max(0.1f, fv);
+    else if (key == "canvas.min_stroke_width" && ParsePositiveFloat(value, fv))
+      cfg.minStrokeWidth = max(0.1f, fv);
+    else if (key == "canvas.max_stroke_width" && ParsePositiveFloat(value, fv))
+      cfg.maxStrokeWidth = max(cfg.minStrokeWidth, fv);
+    else if (key == "canvas.text_size" && ParsePositiveFloat(value, fv))
+      cfg.defaultTextSize = max(1.0f, fv);
+    else if (key == "canvas.min_text_size" && ParsePositiveFloat(value, fv))
+      cfg.minTextSize = max(1.0f, fv);
+    else if (key == "canvas.max_text_size" && ParsePositiveFloat(value, fv))
+      cfg.maxTextSize = max(cfg.minTextSize, fv);
+    else if (key == "canvas.grid_width" && ParsePositiveFloat(value, fv))
+      cfg.defaultGridWidth = max(6.0f, fv);
+    else if (key == "canvas.type")
+      ParseBackgroundType(value, cfg.defaultBgType);
+    else if (key == "canvas.draw_color" && ParseHexColor(value, cv))
+      cfg.defaultDrawColor = cv;
+    else if (key == "zoom.min" && ParsePositiveFloat(value, fv))
+      cfg.minZoom = max(0.01f, fv);
+    else if (key == "zoom.max" && ParsePositiveFloat(value, fv))
+      cfg.maxZoom = max(cfg.minZoom, fv);
+    else if (key == "zoom.wheel_step" && ParsePositiveFloat(value, fv))
+      cfg.zoomStep = max(0.001f, fv);
+    else if (key == "zoom.key_scale" && ParsePositiveFloat(value, fv))
+      cfg.zoomKeyScale = max(1.001f, fv);
+    else if (key == "interaction.pen_sample_distance" &&
+             ParsePositiveFloat(value, fv))
+      cfg.penSampleDistance = max(0.2f, fv);
+    else if (key == "interaction.selection_box_activation_px" &&
+             ParsePositiveFloat(value, fv))
+      cfg.selectionBoxActivationPx = max(0.2f, fv);
+    else if (key == "interaction.hit_tolerance" && ParsePositiveFloat(value, fv))
+      cfg.defaultHitTolerance = max(0.2f, fv);
+    else if (key == "interaction.paste_offset_step" &&
+             ParsePositiveFloat(value, fv))
+      cfg.pasteOffsetStep = max(1.0f, fv);
+    else if (key == "theme.light.background" && ParseHexColor(value, cv))
+      cfg.lightBackground = cv;
+    else if (key == "theme.dark.background" && ParseHexColor(value, cv))
+      cfg.darkBackground = cv;
+    else if (key == "theme.light.ui_text" && ParseHexColor(value, cv))
+      cfg.lightUiText = cv;
+    else if (key == "theme.dark.ui_text" && ParseHexColor(value, cv))
+      cfg.darkUiText = cv;
+    else if (key == "mode_color.selection" && ParseHexColor(value, cv))
+      cfg.modeSelection = cv;
+    else if (key == "mode_color.move" && ParseHexColor(value, cv))
+      cfg.modeMove = cv;
+    else if (key == "mode_color.line" && ParseHexColor(value, cv))
+      cfg.modeLine = cv;
+    else if (key == "mode_color.circle" && ParseHexColor(value, cv))
+      cfg.modeCircle = cv;
+    else if (key == "mode_color.rect" && ParseHexColor(value, cv))
+      cfg.modeRect = cv;
+    else if (key == "mode_color.text" && ParseHexColor(value, cv))
+      cfg.modeTextColor = cv;
+    else if (key == "mode_color.eraser" && ParseHexColor(value, cv))
+      cfg.modeEraser = cv;
+    else if (key == "mode_color.pen" && ParseHexColor(value, cv))
+      cfg.modePen = cv;
+    else if (key.rfind("key.", 0) == 0)
+      cfg.keymap[key.substr(4)] = ParseBindingList(value);
+  }
+
+  cfg.maxStrokeWidth = max(cfg.minStrokeWidth, cfg.maxStrokeWidth);
+  cfg.defaultStrokeWidth =
+      min(cfg.maxStrokeWidth, max(cfg.minStrokeWidth, cfg.defaultStrokeWidth));
+  cfg.maxTextSize = max(cfg.minTextSize, cfg.maxTextSize);
+  cfg.defaultTextSize =
+      min(cfg.maxTextSize, max(cfg.minTextSize, cfg.defaultTextSize));
 }
 
 bool ParseHexColor(string hex, Color &outColor) {
@@ -528,19 +1020,22 @@ string ColorToHex(Color c) {
   return TextFormat("#%02X%02X%02X%02X", c.r, c.g, c.b, c.a);
 }
 
-void SetStatus(Canvas &canvas, const string &message, double seconds = 2.0) {
+void SetStatus(Canvas &canvas, const AppConfig &cfg, const string &message,
+               double seconds = -1.0) {
   canvas.statusMessage = message;
+  if (seconds <= 0.0)
+    seconds = cfg.statusDurationSeconds;
   canvas.statusUntil = GetTime() + seconds;
 }
 
-void SetTheme(Canvas &canvas, bool dark) {
+void SetTheme(Canvas &canvas, const AppConfig &cfg, bool dark) {
   canvas.darkTheme = dark;
   if (dark) {
-    canvas.backgroundColor = {24, 26, 31, 255};
-    canvas.uiTextColor = {220, 222, 228, 255};
+    canvas.backgroundColor = cfg.darkBackground;
+    canvas.uiTextColor = cfg.darkUiText;
   } else {
-    canvas.backgroundColor = WHITE;
-    canvas.uiTextColor = DARKGRAY;
+    canvas.backgroundColor = cfg.lightBackground;
+    canvas.uiTextColor = cfg.lightUiText;
   }
 }
 
@@ -574,11 +1069,54 @@ void DrawBackgroundPattern(const Canvas &canvas) {
   }
 }
 
+void SetMode(Canvas &canvas, const AppConfig &cfg, Mode mode) {
+  canvas.mode = mode;
+  canvas.isTypingNumber = false;
+  if (mode == SELECTION_MODE) {
+    canvas.modeText = "SELECTION";
+    canvas.modeColor = cfg.modeSelection;
+  } else if (mode == MOVE_MODE) {
+    canvas.modeText = "MOVE";
+    canvas.modeColor = cfg.modeMove;
+  } else if (mode == LINE_MODE) {
+    canvas.modeText = "LINE";
+    canvas.modeColor = cfg.modeLine;
+  } else if (mode == DOTTEDLINE_MODE) {
+    canvas.modeText = "DOTTED LINE";
+    canvas.modeColor = cfg.modeLine;
+  } else if (mode == ARROWLINE_MODE) {
+    canvas.modeText = "ARROW LINE";
+    canvas.modeColor = cfg.modeLine;
+  } else if (mode == CIRCLE_MODE) {
+    canvas.modeText = "CIRCLE";
+    canvas.modeColor = cfg.modeCircle;
+  } else if (mode == DOTTEDCIRCLE_MODE) {
+    canvas.modeText = "DOTTED CIRCLE";
+    canvas.modeColor = cfg.modeCircle;
+  } else if (mode == RECTANGLE_MODE) {
+    canvas.modeText = "RECTANGLE";
+    canvas.modeColor = cfg.modeRect;
+  } else if (mode == DOTTEDRECT_MODE) {
+    canvas.modeText = "DOTTED RECT";
+    canvas.modeColor = cfg.modeRect;
+  } else if (mode == TEXT_MODE) {
+    canvas.modeText = "TEXT";
+    canvas.modeColor = cfg.modeTextColor;
+  } else if (mode == ERASER_MODE) {
+    canvas.modeText = "ERASER";
+    canvas.modeColor = cfg.modeEraser;
+  } else if (mode == PEN_MODE) {
+    canvas.modeText = "PEN";
+    canvas.modeColor = cfg.modePen;
+  }
+}
+
 void SerializeElement(ofstream &out, const Element &el) {
   out << "ELEMENT " << (int)el.type << " " << el.uniqueID << " "
       << el.strokeWidth << " " << (int)el.color.r << " " << (int)el.color.g
       << " " << (int)el.color.b << " " << (int)el.color.a << " " << el.start.x
-      << " " << el.start.y << " " << el.end.x << " " << el.end.y << "\n";
+      << " " << el.start.y << " " << el.end.x << " " << el.end.y << " "
+      << el.textSize << "\n";
   out << "TEXT " << el.text.size() << "\n" << el.text << "\n";
   out << "PATH " << el.path.size() << "\n";
   for (const auto &p : el.path)
@@ -632,7 +1170,8 @@ void WriteSvgElement(ofstream &out, const Element &el, const string &fontFamily,
   Vector2 s = GetWorldToScreen2D(el.start, camera);
   Vector2 e = GetWorldToScreen2D(el.end, camera);
   float scaledStroke = max(0.5f, el.strokeWidth * camera.zoom);
-  float scaledTextSize = max(6.0f, textSize * camera.zoom);
+  float effectiveTextSize = (el.textSize > 0.0f) ? el.textSize : textSize;
+  float scaledTextSize = max(6.0f, effectiveTextSize * camera.zoom);
   if (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE || el.type == ARROWLINE_MODE) {
     out << "<line x1=\"" << s.x << "\" y1=\"" << s.y << "\" x2=\""
         << e.x << "\" y2=\"" << e.y << "\" stroke=\"" << stroke
@@ -720,7 +1259,7 @@ bool ExportCanvasPng(const Canvas &canvas, const string &filename) {
   return ok;
 }
 
-bool TryLoadFont(Canvas &canvas, const string &nameOrPath) {
+bool TryLoadFont(Canvas &canvas, const AppConfig &cfg, const string &nameOrPath) {
   string path = Trim(nameOrPath);
   if (path.empty())
     return false;
@@ -734,7 +1273,8 @@ bool TryLoadFont(Canvas &canvas, const string &nameOrPath) {
   }
   if (!FileExists(path.c_str()))
     return false;
-  Font newFont = LoadFont(path.c_str());
+  int atlas = max(16, cfg.fontAtlasSize);
+  Font newFont = LoadFontEx(path.c_str(), atlas, nullptr, 0);
   if (newFont.texture.id == 0)
     return false;
   SetTextureFilter(newFont.texture, TEXTURE_FILTER_BILINEAR);
@@ -746,7 +1286,7 @@ bool TryLoadFont(Canvas &canvas, const string &nameOrPath) {
   return true;
 }
 
-void ExecuteCommand(Canvas &canvas, string command) {
+void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
   command = Trim(command);
   if (command.empty())
     return;
@@ -774,87 +1314,133 @@ void ExecuteCommand(Canvas &canvas, string command) {
       canvas.savePath = targetPath;
     }
     if (SaveCanvasToFile(canvas, targetPath)) {
-      SetStatus(canvas, "Saved to " + targetPath);
+      SetStatus(canvas, cfg, "Saved to " + targetPath);
       if (opLower == "wq")
         canvas.shouldQuit = true;
     } else {
-      SetStatus(canvas, "Save failed: " + targetPath);
+      SetStatus(canvas, cfg, "Save failed: " + targetPath);
     }
     return;
   }
   if (opLower == "theme") {
     string v = ToLower(arg);
     if (v == "dark") {
-      SetTheme(canvas, true);
-      SetStatus(canvas, "Theme set to dark");
+      SetTheme(canvas, cfg, true);
+      SetStatus(canvas, cfg, "Theme set to dark");
     } else if (v == "light") {
-      SetTheme(canvas, false);
-      SetStatus(canvas, "Theme set to light");
+      SetTheme(canvas, cfg, false);
+      SetStatus(canvas, cfg, "Theme set to light");
     } else {
-      SetStatus(canvas, "Usage: :theme dark|light");
+      SetStatus(canvas, cfg, "Usage: :theme dark|light");
     }
     return;
   }
   if (opLower == "font") {
     float size = 0.0f;
-    if (!ParsePositiveFloat(arg, size) || size < 6.0f || size > 200.0f) {
-      SetStatus(canvas, "Usage: :font [6-200]");
+    if (!ParsePositiveFloat(arg, size) || size < cfg.minTextSize ||
+        size > cfg.maxTextSize) {
+      SetStatus(canvas, cfg,
+                "Usage: :font [" + to_string((int)cfg.minTextSize) + "-" +
+                    to_string((int)cfg.maxTextSize) + "]");
       return;
     }
-    canvas.textSize = size;
-    SetStatus(canvas, "Font size set to " + to_string((int)size));
+    vector<int> selectedIDs = GetSelectedIDs(canvas);
+    if (!selectedIDs.empty()) {
+      SaveBackup(canvas);
+      for (int id : selectedIDs) {
+        int idx = FindElementIndexByID(canvas, id);
+        if (idx == -1)
+          continue;
+        ApplyTextSizeRecursive(canvas.elements[idx], size, canvas.font,
+                               canvas.textSize);
+      }
+      SetStatus(canvas, cfg,
+                "Font size applied to selected text: " + to_string((int)size));
+    } else {
+      canvas.textSize = size;
+      SetStatus(canvas, cfg, "Default font size set to " + to_string((int)size));
+    }
     return;
   }
   if (opLower == "font-family") {
-    if (TryLoadFont(canvas, arg))
-      SetStatus(canvas, "Font family set to " + arg);
-    else
-      SetStatus(canvas, "Font load failed: " + arg);
+    if (TryLoadFont(canvas, cfg, arg)) {
+      for (auto &el : canvas.elements)
+        RecomputeTextBoundsRecursive(el, canvas.font, canvas.textSize);
+      SetStatus(canvas, cfg, "Font family set to " + arg);
+    } else
+      SetStatus(canvas, cfg, "Font load failed: " + arg);
     return;
   }
   if (opLower == "color") {
     Color c{};
     if (!ParseHexColor(arg, c)) {
-      SetStatus(canvas, "Usage: :color #RRGGBB or #RRGGBBAA");
+      SetStatus(canvas, cfg, "Usage: :color #RRGGBB or #RRGGBBAA");
       return;
     }
-    canvas.drawColor = c;
-    SetStatus(canvas, "Draw color set to " + ColorToHex(c));
+    vector<int> selectedIDs = GetSelectedIDs(canvas);
+    if (!selectedIDs.empty()) {
+      SaveBackup(canvas);
+      for (int id : selectedIDs) {
+        int idx = FindElementIndexByID(canvas, id);
+        if (idx == -1)
+          continue;
+        ApplyColorRecursive(canvas.elements[idx], c);
+      }
+      SetStatus(canvas, cfg, "Color applied to selection: " + ColorToHex(c));
+    } else {
+      canvas.drawColor = c;
+      SetStatus(canvas, cfg, "Default draw color set to " + ColorToHex(c));
+    }
     return;
   }
   if (opLower == "strokew") {
     float w = 0.0f;
-    if (!ParsePositiveFloat(arg, w) || w < 1.0f || w > 100.0f) {
-      SetStatus(canvas, "Usage: :strokew [1-100]");
+    if (!ParsePositiveFloat(arg, w) || w < cfg.minStrokeWidth ||
+        w > cfg.maxStrokeWidth) {
+      SetStatus(canvas, cfg,
+                "Usage: :strokew [" + to_string((int)cfg.minStrokeWidth) + "-" +
+                    to_string((int)cfg.maxStrokeWidth) + "]");
       return;
     }
-    canvas.strokeWidth = w;
-    SetStatus(canvas, "Stroke width set");
+    vector<int> selectedIDs = GetSelectedIDs(canvas);
+    if (!selectedIDs.empty()) {
+      SaveBackup(canvas);
+      for (int id : selectedIDs) {
+        int idx = FindElementIndexByID(canvas, id);
+        if (idx == -1)
+          continue;
+        ApplyStrokeRecursive(canvas.elements[idx], w);
+      }
+      SetStatus(canvas, cfg, "Stroke width applied to selection");
+    } else {
+      canvas.strokeWidth = w;
+      SetStatus(canvas, cfg, "Default stroke width set");
+    }
     return;
   }
   if (opLower == "gridw") {
     float gw = 0.0f;
     if (!ParsePositiveFloat(arg, gw) || gw < 6.0f || gw > 200.0f) {
-      SetStatus(canvas, "Usage: :gridw [6-200]");
+      SetStatus(canvas, cfg, "Usage: :gridw [6-200]");
       return;
     }
     canvas.gridWidth = gw;
-    SetStatus(canvas, "Grid spacing set");
+    SetStatus(canvas, cfg, "Grid spacing set");
     return;
   }
   if (opLower == "type") {
     string v = ToLower(arg);
     if (v == "blank") {
       canvas.bgType = BG_BLANK;
-      SetStatus(canvas, "Canvas type: blank");
+      SetStatus(canvas, cfg, "Canvas type: blank");
     } else if (v == "grid") {
       canvas.bgType = BG_GRID;
-      SetStatus(canvas, "Canvas type: grid");
+      SetStatus(canvas, cfg, "Canvas type: grid");
     } else if (v == "dotted") {
       canvas.bgType = BG_DOTTED;
-      SetStatus(canvas, "Canvas type: dotted");
+      SetStatus(canvas, cfg, "Canvas type: dotted");
     } else {
-      SetStatus(canvas, "Usage: :type blank|grid|dotted");
+      SetStatus(canvas, cfg, "Usage: :type blank|grid|dotted");
     }
     return;
   }
@@ -862,11 +1448,11 @@ void ExecuteCommand(Canvas &canvas, string command) {
       opLower == "resizer") {
     int delta = 0;
     if (!ParseIntValue(arg, delta)) {
-      SetStatus(canvas, "Usage: :" + opLower + " [number]");
+      SetStatus(canvas, cfg, "Usage: :" + opLower + " [number]");
       return;
     }
-    int minW = 320;
-    int minH = 240;
+    int minW = cfg.minWindowWidth;
+    int minH = cfg.minWindowHeight;
     int x = GetWindowPosition().x;
     int y = GetWindowPosition().y;
     int w = GetScreenWidth();
@@ -886,7 +1472,7 @@ void ExecuteCommand(Canvas &canvas, string command) {
     h = max(minH, h);
     SetWindowSize(w, h);
     SetWindowPosition(x, y);
-    SetStatus(canvas, "Window resized");
+    SetStatus(canvas, cfg, "Window resized");
     return;
   }
   if (opLower == "export") {
@@ -899,39 +1485,74 @@ void ExecuteCommand(Canvas &canvas, string command) {
     if (type == "png") {
       string outName = base + ".png";
       if (ExportCanvasPng(canvas, outName))
-        SetStatus(canvas, "Exported " + outName);
+        SetStatus(canvas, cfg, "Exported " + outName);
       else
-        SetStatus(canvas, "PNG export failed");
+        SetStatus(canvas, cfg, "PNG export failed");
     } else if (type == "svg") {
       string outName = base + ".svg";
       if (ExportCanvasSvg(canvas, outName))
-        SetStatus(canvas, "Exported " + outName);
+        SetStatus(canvas, cfg, "Exported " + outName);
       else
-        SetStatus(canvas, "SVG export failed");
+        SetStatus(canvas, cfg, "SVG export failed");
     } else {
-      SetStatus(canvas, "Usage: :export png|svg");
+      SetStatus(canvas, cfg, "Usage: :export png|svg");
     }
     return;
   }
 
-  SetStatus(canvas, "Unknown command: " + op);
+  if (opLower == "reloadconfig") {
+    SetDefaultKeymap(cfg);
+    LoadConfig(cfg);
+    SetTheme(canvas, cfg, canvas.darkTheme);
+    SetStatus(canvas, cfg, "Config reloaded");
+    return;
+  }
+
+  if (opLower == "writeconfig") {
+    WriteDefaultConfig(cfg);
+    SetStatus(canvas, cfg, "Config written to " + cfg.configPath);
+    return;
+  }
+
+  SetStatus(canvas, cfg, "Unknown command: " + op);
 }
 
 int main() {
-  int screenWidth = 1000;
-  int screenHeight = 800;
+  AppConfig cfg;
+  SetDefaultKeymap(cfg);
+  LoadConfig(cfg);
+
+  int screenWidth = cfg.windowWidth;
+  int screenHeight = cfg.windowHeight;
   Canvas canvas;
   SetConfigFlags(FLAG_MSAA_4X_HINT);
-  InitWindow(screenWidth, screenHeight, "Toggle : no more toggling");
+  InitWindow(screenWidth, screenHeight, cfg.windowTitle.c_str());
+  SetWindowMinSize(cfg.minWindowWidth, cfg.minWindowHeight);
   SetExitKey(KEY_NULL);
-  SetTargetFPS(60);
+  SetTargetFPS(cfg.targetFps);
   canvas.camera.offset = {0.0f, 0.0f};
   canvas.camera.target = {0.0f, 0.0f};
   canvas.camera.rotation = 0.0f;
   canvas.camera.zoom = 1.0f;
-  canvas.font = LoadFont("IosevkaNerdFontMono-Regular.ttf");
+  canvas.font =
+      LoadFontEx(cfg.defaultFontPath.c_str(), max(16, cfg.fontAtlasSize), nullptr, 0);
+  if (canvas.font.texture.id == 0) {
+    canvas.font = GetFontDefault();
+    canvas.ownsFont = false;
+    canvas.fontFamilyPath = "default";
+  } else {
+    canvas.ownsFont = true;
+    canvas.fontFamilyPath = cfg.defaultFontPath;
+  }
   SetTextureFilter(canvas.font.texture, TEXTURE_FILTER_BILINEAR);
-  SetTheme(canvas, false);
+  canvas.strokeWidth = cfg.defaultStrokeWidth;
+  canvas.textSize = cfg.defaultTextSize;
+  canvas.gridWidth = cfg.defaultGridWidth;
+  canvas.drawColor = cfg.defaultDrawColor;
+  canvas.showTags = cfg.defaultShowTags;
+  canvas.bgType = cfg.defaultBgType;
+  SetTheme(canvas, cfg, cfg.defaultDarkTheme);
+  SetMode(canvas, cfg, SELECTION_MODE);
 
   while (!WindowShouldClose()) {
     bool escPressed = IsKeyPressed(KEY_ESCAPE);
@@ -944,11 +1565,12 @@ int main() {
     }
     bool shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
     bool ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
+    bool altDown = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
     Vector2 mouseScreen = GetMousePosition();
     Vector2 mouseWorld = GetScreenToWorld2D(mouseScreen, canvas.camera);
 
     if (!canvas.isTextEditing && !canvas.commandMode &&
-        shiftDown && IsKeyPressed(KEY_SEMICOLON)) {
+        IsActionPressed(cfg, "open_command_mode", shiftDown, ctrlDown, altDown)) {
       canvas.commandMode = true;
       canvas.commandBuffer.clear();
     }
@@ -969,7 +1591,7 @@ int main() {
           canvas.commandBuffer.pop_back();
         }
         if (IsKeyPressed(KEY_ENTER)) {
-          ExecuteCommand(canvas, ":" + canvas.commandBuffer);
+          ExecuteCommand(canvas, cfg, ":" + canvas.commandBuffer);
           canvas.commandMode = false;
           canvas.commandBuffer.clear();
         }
@@ -983,11 +1605,11 @@ int main() {
     float wheel = GetMouseWheelMove();
     if (wheel != 0.0f) {
       float oldZoom = canvas.camera.zoom;
-      float nextZoom = oldZoom + wheel * 0.1f * oldZoom;
-      if (nextZoom < 0.1f)
-        nextZoom = 0.1f;
-      if (nextZoom > 10.0f)
-        nextZoom = 10.0f;
+      float nextZoom = oldZoom + wheel * cfg.zoomStep * oldZoom;
+      if (nextZoom < cfg.minZoom)
+        nextZoom = cfg.minZoom;
+      if (nextZoom > cfg.maxZoom)
+        nextZoom = cfg.maxZoom;
       if (nextZoom != oldZoom) {
         Vector2 before = GetScreenToWorld2D(mouseScreen, canvas.camera);
         canvas.camera.zoom = nextZoom;
@@ -997,11 +1619,11 @@ int main() {
       }
     }
 
-    if ((shiftDown && IsKeyPressed(KEY_EQUAL)) || IsKeyPressed(KEY_KP_ADD)) {
+    if (IsActionPressed(cfg, "zoom_in", shiftDown, ctrlDown, altDown)) {
       float oldZoom = canvas.camera.zoom;
-      float nextZoom = oldZoom * 1.1f;
-      if (nextZoom > 10.0f)
-        nextZoom = 10.0f;
+      float nextZoom = oldZoom * cfg.zoomKeyScale;
+      if (nextZoom > cfg.maxZoom)
+        nextZoom = cfg.maxZoom;
       if (nextZoom != oldZoom) {
         Vector2 before = GetScreenToWorld2D(mouseScreen, canvas.camera);
         canvas.camera.zoom = nextZoom;
@@ -1010,12 +1632,11 @@ int main() {
             Vector2Subtract(canvas.camera.target, Vector2Subtract(before, after));
       }
     }
-    if ((shiftDown && IsKeyPressed(KEY_MINUS)) ||
-        IsKeyPressed(KEY_KP_SUBTRACT)) {
+    if (IsActionPressed(cfg, "zoom_out", shiftDown, ctrlDown, altDown)) {
       float oldZoom = canvas.camera.zoom;
-      float nextZoom = oldZoom / 1.1f;
-      if (nextZoom < 0.1f)
-        nextZoom = 0.1f;
+      float nextZoom = oldZoom / cfg.zoomKeyScale;
+      if (nextZoom < cfg.minZoom)
+        nextZoom = cfg.minZoom;
       if (nextZoom != oldZoom) {
         Vector2 before = GetScreenToWorld2D(mouseScreen, canvas.camera);
         canvas.camera.zoom = nextZoom;
@@ -1029,6 +1650,7 @@ int main() {
       canvas.isTextEditing = false;
       canvas.textBuffer.clear();
       canvas.editingIndex = -1;
+      canvas.editingTextSize = canvas.textSize;
       canvas.textEditBackedUp = false;
     }
     if (escPressed && !canvas.isTextEditing) {
@@ -1040,16 +1662,17 @@ int main() {
     if (canvas.isTextEditing)
       key = 0;
 
-    if (!canvas.isTextEditing && !shiftDown && IsKeyPressed(KEY_EQUAL)) {
-      canvas.strokeWidth = min(50.0f, canvas.strokeWidth + 1.0f);
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "stroke_inc", shiftDown, ctrlDown, altDown)) {
+      canvas.strokeWidth = min(cfg.maxStrokeWidth, canvas.strokeWidth + 1.0f);
     }
-    if (!canvas.isTextEditing && !shiftDown && IsKeyPressed(KEY_MINUS)) {
-      canvas.strokeWidth = max(1.0f, canvas.strokeWidth - 1.0f);
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "stroke_dec", shiftDown, ctrlDown, altDown)) {
+      canvas.strokeWidth = max(cfg.minStrokeWidth, canvas.strokeWidth - 1.0f);
     }
 
-    // --- key handling: NOTE: P is handled in a single branch to avoid both
-    // paste and pen activation on Shift+P
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_Y) && !ctrlDown) {
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "copy", shiftDown, ctrlDown, altDown)) {
       if (!canvas.selectedIndices.empty()) {
         canvas.clipboard.clear();
         for (int idx : canvas.selectedIndices) {
@@ -1060,110 +1683,95 @@ int main() {
       }
     }
 
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_P)) {
-      // SHIFT+P => Paste (only if clipboard not empty)
-      if (shiftDown) {
-        if (!canvas.clipboard.empty()) {
-          SaveBackup(canvas);
-          RestoreZOrder(canvas);
-          canvas.selectedIndices.clear();
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "paste", shiftDown, ctrlDown, altDown)) {
+      if (!canvas.clipboard.empty()) {
+        SaveBackup(canvas);
+        RestoreZOrder(canvas);
+        canvas.selectedIndices.clear();
 
-          float step = 20.0f * (canvas.pasteOffsetIndex + 1);
-          Vector2 pasteOffset = {step, step};
-          for (const auto &item : canvas.clipboard) {
-            Element cloned = item;
+        float step = cfg.pasteOffsetStep * (canvas.pasteOffsetIndex + 1);
+        Vector2 pasteOffset = {step, step};
+        for (const auto &item : canvas.clipboard) {
+          Element cloned = item;
 
-            // Assign a fresh ID to the copy (and ensure children have IDs)
-            cloned.uniqueID = canvas.nextElementId++;
-            if (cloned.type == GROUP_MODE) {
-              for (auto &c : cloned.children)
-                EnsureUniqueIDRecursive(c, canvas);
-            }
-
-            cloned.originalIndex = -1;
-
-            MoveElement(cloned, pasteOffset);
-            canvas.elements.push_back(cloned);
-            canvas.selectedIndices.push_back((int)canvas.elements.size() - 1);
+          // Assign a fresh ID to the copy (and ensure children have IDs)
+          cloned.uniqueID = canvas.nextElementId++;
+          if (cloned.type == GROUP_MODE) {
+            for (auto &c : cloned.children)
+              EnsureUniqueIDRecursive(c, canvas);
           }
-          canvas.pasteOffsetIndex++;
+
+          cloned.originalIndex = -1;
+
+          MoveElement(cloned, pasteOffset);
+          canvas.elements.push_back(cloned);
+          canvas.selectedIndices.push_back((int)canvas.elements.size() - 1);
         }
-      } else {
-        // plain 'p' => PEN mode
-        canvas.mode = PEN_MODE;
-        canvas.modeText = "PEN";
-        canvas.modeColor = BLACK;
-        canvas.isTypingNumber = false;
+        canvas.pasteOffsetIndex++;
       }
+    } else if (!canvas.isTextEditing &&
+               IsActionPressed(cfg, "mode_pen", shiftDown, ctrlDown, altDown)) {
+      SetMode(canvas, cfg, PEN_MODE);
     }
 
     // Other mode keys
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_S)) {
-      canvas.mode = SELECTION_MODE;
-      canvas.modeText = "SELECTION";
-      canvas.modeColor = MAROON;
-      canvas.isTypingNumber = false;
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "mode_selection", shiftDown, ctrlDown, altDown)) {
+      SetMode(canvas, cfg, SELECTION_MODE);
     }
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_M)) {
-      canvas.mode = MOVE_MODE;
-      canvas.modeText = "MOVE";
-      canvas.modeColor = DARKBROWN;
-      canvas.isTypingNumber = false;
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "mode_move", shiftDown, ctrlDown, altDown)) {
+      SetMode(canvas, cfg, MOVE_MODE);
     }
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_L)) {
-      if (canvas.lastKey == KEY_D) {
-        canvas.mode = DOTTEDLINE_MODE;
-        canvas.modeText = "DOTTED LINE";
-      } else if (canvas.lastKey == KEY_A) {
-        canvas.mode = ARROWLINE_MODE;
-        canvas.modeText = "ARROW LINE";
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "mode_line_base", shiftDown, ctrlDown, altDown)) {
+      int dottedPrefixKey = PrimaryKeyForAction(cfg, "prefix_dotted");
+      int arrowPrefixKey = PrimaryKeyForAction(cfg, "prefix_arrow");
+      if (canvas.lastKey == dottedPrefixKey) {
+        SetMode(canvas, cfg, DOTTEDLINE_MODE);
+      } else if (canvas.lastKey == arrowPrefixKey) {
+        SetMode(canvas, cfg, ARROWLINE_MODE);
       } else {
-        canvas.mode = LINE_MODE;
-        canvas.modeText = "LINE";
+        SetMode(canvas, cfg, LINE_MODE);
       }
-      canvas.modeColor = BLUE;
-      canvas.isTypingNumber = false;
     }
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_C)) {
-      if (canvas.lastKey == KEY_D) {
-        canvas.mode = DOTTEDCIRCLE_MODE;
-        canvas.modeText = "DOTTED CIRCLE";
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "mode_circle_base", shiftDown, ctrlDown, altDown)) {
+      int dottedPrefixKey = PrimaryKeyForAction(cfg, "prefix_dotted");
+      if (canvas.lastKey == dottedPrefixKey) {
+        SetMode(canvas, cfg, DOTTEDCIRCLE_MODE);
       } else {
-        canvas.mode = CIRCLE_MODE;
-        canvas.modeText = "CIRCLE";
+        SetMode(canvas, cfg, CIRCLE_MODE);
       }
-      canvas.modeColor = DARKGREEN;
-      canvas.isTypingNumber = false;
     }
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_R)) {
-      if (canvas.lastKey == KEY_D) {
-        canvas.mode = DOTTEDRECT_MODE;
-        canvas.modeText = "DOTTED RECT";
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "mode_rect_base", shiftDown, ctrlDown, altDown)) {
+      int dottedPrefixKey = PrimaryKeyForAction(cfg, "prefix_dotted");
+      if (canvas.lastKey == dottedPrefixKey) {
+        SetMode(canvas, cfg, DOTTEDRECT_MODE);
       } else {
-        canvas.mode = RECTANGLE_MODE;
-        canvas.modeText = "RECTANGLE";
+        SetMode(canvas, cfg, RECTANGLE_MODE);
       }
-      canvas.modeColor = RED;
-      canvas.isTypingNumber = false;
     }
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_E)) {
-      canvas.mode = ERASER_MODE;
-      canvas.modeText = "ERASER";
-      canvas.modeColor = ORANGE;
-      canvas.isTypingNumber = false;
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "mode_eraser", shiftDown, ctrlDown, altDown)) {
+      SetMode(canvas, cfg, ERASER_MODE);
     }
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_T)) {
-      canvas.mode = TEXT_MODE;
-      canvas.modeText = "TEXT";
-      canvas.modeColor = DARKBLUE;
-      canvas.isTypingNumber = false;
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "mode_text", shiftDown, ctrlDown, altDown)) {
+      SetMode(canvas, cfg, TEXT_MODE);
       if (!canvas.isTextEditing) {
         canvas.textBuffer.clear();
         canvas.editingIndex = -1;
       }
     }
 
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_G)) {
+    bool groupTogglePressed =
+        IsActionPressed(cfg, "group_toggle", shiftDown, ctrlDown, altDown) ||
+        (shiftDown &&
+         IsActionPressed(cfg, "group_toggle", false, ctrlDown, altDown));
+    if (!canvas.isTextEditing && groupTogglePressed) {
       if (shiftDown) {
         // Ungroup selected group(s)
         if (!canvas.selectedIndices.empty()) {
@@ -1212,17 +1820,18 @@ int main() {
       }
     }
 
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_F))
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "toggle_tags", shiftDown, ctrlDown, altDown))
       canvas.showTags = !canvas.showTags;
     if (key != 0)
       canvas.lastKey = key;
 
     if (!canvas.isTextEditing) {
-      bool redoPressed = (IsKeyPressed(KEY_U) && shiftDown) ||
-                         (ctrlDown && IsKeyPressed(KEY_Y)) ||
-                         (ctrlDown && shiftDown && IsKeyPressed(KEY_Z));
+      bool redoPressed =
+          IsActionPressed(cfg, "redo", shiftDown, ctrlDown, altDown);
       bool undoPressed =
-          (!redoPressed && IsKeyPressed(KEY_U)) || (ctrlDown && IsKeyPressed(KEY_Z));
+          !redoPressed &&
+          IsActionPressed(cfg, "undo", shiftDown, ctrlDown, altDown);
 
       if (redoPressed) {
         if (!canvas.redoStack.empty()) {
@@ -1238,7 +1847,8 @@ int main() {
         canvas.selectedIndices.clear();
       }
     }
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_X)) {
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "delete_selection", shiftDown, ctrlDown, altDown)) {
       vector<int> selectedIDs = GetSelectedIDs(canvas);
       if (!selectedIDs.empty()) {
         SaveBackup(canvas);
@@ -1258,10 +1868,12 @@ int main() {
         canvas.selectedIndices.clear();
       }
     }
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_LEFT_BRACKET)) {
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "z_backward", shiftDown, ctrlDown, altDown)) {
       MoveSelectionZOrder(canvas, false);
     }
-    if (!canvas.isTextEditing && IsKeyPressed(KEY_RIGHT_BRACKET)) {
+    if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "z_forward", shiftDown, ctrlDown, altDown)) {
       MoveSelectionZOrder(canvas, true);
     }
 
@@ -1304,8 +1916,10 @@ int main() {
         }
       }
 
-      bool jPressed = IsKeyPressed(KEY_J);
-      bool kPressed = IsKeyPressed(KEY_K);
+      bool jPressed =
+          IsActionPressed(cfg, "select_next_tag", shiftDown, ctrlDown, altDown);
+      bool kPressed =
+          IsActionPressed(cfg, "select_prev_tag", shiftDown, ctrlDown, altDown);
       if ((jPressed || kPressed) && !canvas.elements.empty()) {
         vector<int> ids;
         ids.reserve(canvas.elements.size());
@@ -1369,7 +1983,7 @@ int main() {
         bool hitSelectedBounds =
             !canvas.selectedIndices.empty() &&
             IsPointOnSelectedBounds(canvas, canvas.startPoint);
-        float hitTol = 2.0f / canvas.camera.zoom;
+        float hitTol = cfg.defaultHitTolerance / canvas.camera.zoom;
         if (hitSelectedBounds) {
           for (int i = (int)canvas.selectedIndices.size() - 1; i >= 0; --i) {
             int idx = canvas.selectedIndices[i];
@@ -1427,7 +2041,7 @@ int main() {
         canvas.currentMouse = GetScreenToWorld2D(GetMousePosition(), canvas.camera);
         Vector2 delta = Vector2Subtract(canvas.currentMouse, prevMouse);
         if (canvas.isBoxSelecting) {
-          float activationDist = 6.0f / canvas.camera.zoom;
+          float activationDist = cfg.selectionBoxActivationPx / canvas.camera.zoom;
           if (!canvas.boxSelectActive &&
               Vector2Distance(canvas.startPoint, canvas.currentMouse) >=
                   activationDist) {
@@ -1501,6 +2115,10 @@ int main() {
           canvas.textBuffer = canvas.elements[hitIndex].text;
           canvas.textPos = canvas.elements[hitIndex].start;
           canvas.editingColor = canvas.elements[hitIndex].color;
+          canvas.editingTextSize =
+              (canvas.elements[hitIndex].textSize > 0.0f)
+                  ? canvas.elements[hitIndex].textSize
+                  : canvas.textSize;
           canvas.textEditBackedUp = false;
         } else {
           SaveBackup(canvas);
@@ -1513,6 +2131,7 @@ int main() {
           newEl.originalIndex = -1;
           newEl.uniqueID = canvas.nextElementId++;
           newEl.text = "";
+          newEl.textSize = canvas.textSize;
           canvas.elements.push_back(newEl);
 
           canvas.textPos = m;
@@ -1521,6 +2140,7 @@ int main() {
           canvas.editingOriginalText.clear();
           canvas.textBuffer.clear();
           canvas.editingColor = canvas.drawColor;
+          canvas.editingTextSize = canvas.textSize;
           canvas.textEditBackedUp = true;
         }
       }
@@ -1550,12 +2170,13 @@ int main() {
               canvas.editingIndex < (int)canvas.elements.size()) {
             Vector2 size =
                 MeasureTextEx(canvas.font, canvas.textBuffer.c_str(),
-                              canvas.textSize, 2);
+                              canvas.editingTextSize, 2);
             Element &el = canvas.elements[canvas.editingIndex];
             el.text = canvas.textBuffer;
+            el.textSize = canvas.editingTextSize;
             el.start = canvas.textPos;
             el.end = {canvas.textPos.x + max(10.0f, size.x),
-                      canvas.textPos.y + max(canvas.textSize, size.y)};
+                      canvas.textPos.y + max(canvas.editingTextSize, size.y)};
           }
         }
       }
@@ -1574,7 +2195,7 @@ int main() {
         canvas.currentMouse = GetScreenToWorld2D(GetMousePosition(), canvas.camera);
         if (canvas.mode == PEN_MODE &&
             Vector2Distance(canvas.currentPath.back(), canvas.currentMouse) >
-                2.0f)
+                cfg.penSampleDistance)
           canvas.currentPath.push_back(canvas.currentMouse);
       }
       if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
@@ -1668,7 +2289,7 @@ int main() {
                        ORANGE);
     if (canvas.mode == TEXT_MODE && canvas.isTextEditing) {
       DrawTextEx(canvas.font, canvas.textBuffer.c_str(), canvas.textPos,
-                 canvas.textSize, 2, Fade(canvas.editingColor, 0.7f));
+                 canvas.editingTextSize, 2, Fade(canvas.editingColor, 0.7f));
     }
     EndMode2D();
     Color modeDisplayColor =

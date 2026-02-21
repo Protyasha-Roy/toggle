@@ -24,7 +24,7 @@ P: paste yanked element - DONE
 e: eraser mode - DONE
 [: z-index bring backward - DONE
 ]: z-index bring forward - DONE
-esc: to stop quit command mode/to stop taking input a keybinding/to escape text mode and anything else - UNDONE
+esc: to stop quit command mode/to stop taking input a keybinding/to escape text mode and anything else - DONE
 =: increase stroke width - DONE
 -: decrease stroke width - DONE
 f: show/hide numbered hints - DONE
