@@ -87,8 +87,8 @@ struct AppConfig {
   Color darkTextureB = {16, 20, 24, 255};
   Color lightGridColor = {110, 118, 126, 48};
   Color darkGridColor = {124, 134, 144, 38};
-  Color lightStatusBg = {226, 231, 236, 235};
-  Color darkStatusBg = {14, 17, 20, 235};
+  Color lightStatusBg = {226, 231, 236, 255};
+  Color darkStatusBg = {14, 17, 20, 255};
   Color lightStatusLabel = {108, 116, 124, 255};
   Color darkStatusLabel = {128, 136, 144, 255};
   Color lightStatusValue = {44, 50, 56, 255};
@@ -210,7 +210,7 @@ struct Canvas {
   Color textureColorA = {250, 250, 250, 255};
   Color textureColorB = {240, 240, 240, 255};
   Color gridColor = {90, 90, 90, 70};
-  Color statusBarBg = {24, 24, 24, 235};
+  Color statusBarBg = {24, 24, 24, 255};
   Color statusLabelColor = {170, 170, 170, 255};
   Color statusValueColor = {245, 245, 245, 255};
   Color drawColor = BLACK;
@@ -1324,8 +1324,10 @@ void SetTheme(Canvas &canvas, const AppConfig &cfg, bool dark) {
     canvas.textureColorB = cfg.darkTextureB;
     canvas.gridColor = cfg.darkGridColor;
     canvas.statusBarBg = cfg.darkStatusBg;
+    canvas.statusBarBg.a = 255;
     canvas.statusLabelColor = cfg.darkStatusLabel;
     canvas.statusValueColor = cfg.darkStatusValue;
+    canvas.drawColor = RAYWHITE;
   } else {
     canvas.backgroundColor = cfg.lightBackground;
     canvas.uiTextColor = cfg.lightUiText;
@@ -1333,8 +1335,10 @@ void SetTheme(Canvas &canvas, const AppConfig &cfg, bool dark) {
     canvas.textureColorB = cfg.lightTextureB;
     canvas.gridColor = cfg.lightGridColor;
     canvas.statusBarBg = cfg.lightStatusBg;
+    canvas.statusBarBg.a = 255;
     canvas.statusLabelColor = cfg.lightStatusLabel;
     canvas.statusValueColor = cfg.lightStatusValue;
+    canvas.drawColor = BLACK;
   }
 }
 
@@ -2203,6 +2207,9 @@ int main() {
     bool altDown = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
     Vector2 mouseScreen = GetMousePosition();
     Vector2 mouseWorld = GetScreenToWorld2D(mouseScreen, canvas.camera);
+    const int statusH = 32;
+    const int statusY = GetScreenHeight() - statusH;
+    const bool mouseOnStatusBar = mouseScreen.y >= statusY;
 
     if (!canvas.isTextEditing && !canvas.commandMode &&
         IsActionPressed(cfg, "open_command_mode", shiftDown, ctrlDown, altDown)) {
@@ -2519,7 +2526,7 @@ int main() {
 
     // SELECTION MODE specific behavior
     if (canvas.mode == MOVE_MODE) {
-      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
         Vector2 delta = GetMouseDelta();
         canvas.camera.target.x -= delta.x / canvas.camera.zoom;
         canvas.camera.target.y -= delta.y / canvas.camera.zoom;
@@ -2609,7 +2616,7 @@ int main() {
         canvas.isTypingNumber = false;
       }
 
-      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
         canvas.startPoint = mouseWorld;
         canvas.currentMouse = mouseWorld;
         canvas.isDragging = true;
@@ -2716,7 +2723,7 @@ int main() {
         canvas.boxSelectActive = false;
       }
     } else if (canvas.mode == ERASER_MODE) {
-      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
         Vector2 m = mouseWorld;
         for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
           Rectangle b = canvas.elements[i].GetBounds();
@@ -2730,7 +2737,7 @@ int main() {
         }
       }
     } else if (canvas.mode == TEXT_MODE) {
-      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
         Vector2 m = mouseWorld;
         int hitIndex = -1;
         for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
@@ -2817,7 +2824,7 @@ int main() {
       }
     } else {
       // Drawing modes (line, rect, circle, pen,...)
-      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
         canvas.startPoint = mouseWorld;
         canvas.currentMouse = canvas.startPoint;
         canvas.isDragging = true;
@@ -2876,7 +2883,7 @@ int main() {
       if (canvas.mode == SELECTION_MODE && isSelected) {
         Rectangle b = canvas.elements[i].GetBounds();
         DrawRectangleLinesEx({b.x - 5, b.y - 5, b.width + 10, b.height + 10}, 2,
-                             MAGENTA);
+                             {70, 140, 160, 255});
       }
       if (canvas.showTags) {
         // Stable displayed ID: uniqueID (always >= 0)
@@ -2891,17 +2898,13 @@ int main() {
         // draw tag near element start
         float tx = canvas.elements[i].start.x;
         float ty = canvas.elements[i].start.y - 22.0f;
-        DrawRectangle((int)tx, (int)ty, 24, 22, Fade(canvas.statusBarBg, 0.92f));
-        DrawRectangleLines((int)tx, (int)ty, 24, 22, canvas.statusLabelColor);
+        DrawRectangle((int)tx, (int)ty, 24, 22, YELLOW);
+        DrawRectangleLines((int)tx, (int)ty, 24, 22, BLACK);
         string tag = TextFormat("%d", displayId);
         float fx = tx + 6.0f;
         float fy = ty + 4.0f;
-        DrawTextEx(canvas.font, tag.c_str(), {fx + 0.6f, fy}, 12, 1,
-                   Fade(BLACK, 0.85f));
-        DrawTextEx(canvas.font, tag.c_str(), {fx, fy + 0.6f}, 12, 1,
-                   Fade(BLACK, 0.85f));
-        DrawTextEx(canvas.font, tag.c_str(), {fx, fy}, 12, 1,
-                   canvas.statusValueColor);
+        DrawTextEx(canvas.font, tag.c_str(), {fx, fy}, 12, 1, BLACK);
+        DrawTextEx(canvas.font, tag.c_str(), {fx + 0.6f, fy}, 12, 1, BLACK);
       }
     }
 
@@ -2935,11 +2938,9 @@ int main() {
     }
     EndMode2D();
 
-    int statusH = 32;
-    int statusY = GetScreenHeight() - statusH;
     DrawRectangle(0, statusY, GetScreenWidth(), statusH, canvas.statusBarBg);
     DrawRectangleLines(0, statusY, GetScreenWidth(), statusH,
-                       Fade(canvas.statusLabelColor, 0.55f));
+                       canvas.statusLabelColor);
 
     string saveDisplay =
         canvas.savePath.empty() ? DefaultSaveTargetPath(cfg) : canvas.savePath;
@@ -2990,9 +2991,8 @@ int main() {
     if (canvas.commandMode) {
       int h = 32;
       int y = statusY - h;
-      DrawRectangle(0, y, GetScreenWidth(), h, Fade(canvas.statusBarBg, 0.98f));
-      DrawRectangleLines(0, y, GetScreenWidth(), h,
-                         Fade(canvas.statusLabelColor, 0.55f));
+      DrawRectangle(0, y, GetScreenWidth(), h, canvas.statusBarBg);
+      DrawRectangleLines(0, y, GetScreenWidth(), h, canvas.statusLabelColor);
       string line = ":" + canvas.commandBuffer + "_";
       DrawTextEx(canvas.font, line.c_str(), {10, (float)y + 6.0f}, 18, 1.5f,
                  canvas.statusValueColor);
