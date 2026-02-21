@@ -3259,6 +3259,23 @@ int main() {
           }
         }
 
+        if (!canvas.transformActive && activeIdx >= 0 &&
+            activeIdx < (int)canvas.elements.size()) {
+          Element &el = canvas.elements[activeIdx];
+          if (IsPointInSelectionVisual(el, mouseWorld)) {
+            SaveBackup(canvas);
+            canvas.transformActive = true;
+            canvas.transformHandle = 1;
+            canvas.transformIndex = activeIdx;
+            canvas.transformStart = el;
+            canvas.transformCenter = ElementCenterLocal(el);
+            canvas.transformStartMouse = mouseWorld;
+            canvas.transformStartAngle = atan2f(
+                mouseWorld.y - canvas.transformCenter.y,
+                mouseWorld.x - canvas.transformCenter.x);
+          }
+        }
+
         if (!canvas.transformActive) {
           int hitIndex = pickTopElement();
           if (hitIndex != -1) {
