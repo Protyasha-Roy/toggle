@@ -1041,6 +1041,7 @@ void SetDefaultKeymap(AppConfig &cfg) {
   AddDefaultBinding(cfg, "z_forward", "Right_Bracket");
   AddDefaultBinding(cfg, "select_next_tag", "J");
   AddDefaultBinding(cfg, "select_prev_tag", "K");
+  AddDefaultBinding(cfg, "select_all", "Ctrl+A");
 }
 
 void WriteDefaultConfig(const AppConfig &cfg) {
@@ -2511,6 +2512,13 @@ int main() {
       }
     }
     if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "select_all", shiftDown, ctrlDown, altDown)) {
+      RestoreZOrder(canvas);
+      canvas.selectedIndices.clear();
+      for (int i = 0; i < (int)canvas.elements.size(); ++i)
+        canvas.selectedIndices.push_back(i);
+    }
+    if (!canvas.isTextEditing &&
         IsActionPressed(cfg, "z_backward", shiftDown, ctrlDown, altDown)) {
       MoveSelectionZOrder(canvas, false);
     }
@@ -2963,11 +2971,13 @@ int main() {
     string sw = TextFormat("%.1f", canvas.strokeWidth);
     string col = ColorToHex(canvas.drawColor);
     string zm = TextFormat("%.2fx", canvas.camera.zoom);
+    string zperc = TextFormat("%.0f%%", canvas.camera.zoom * 100.0f);
     string sel = TextFormat("%d", (int)canvas.selectedIndices.size());
     string els = TextFormat("%d", (int)canvas.elements.size());
     vector<pair<string, string>> rightPairs = {{"SW: ", sw},
                                                {"  COL: ", col},
                                                {"  Z: ", zm},
+                                               {"  SCALE: ", zperc},
                                                {"  SEL: ", sel},
                                                {"  ELS: ", els}};
     float rightW = 0.0f;
