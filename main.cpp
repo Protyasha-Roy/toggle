@@ -290,13 +290,17 @@ bool IsPointOnElement(const Element &el, Vector2 p, float tolerance) {
   if (el.type == CIRCLE_MODE || el.type == DOTTEDCIRCLE_MODE) {
     float r = Vector2Distance(el.start, el.end);
     float d = Vector2Distance(p, el.start);
-    return fabsf(d - r) <= (el.strokeWidth * 0.5f + tol);
+    return d <= (r + el.strokeWidth * 0.5f + tol);
   }
   if (el.type == RECTANGLE_MODE || el.type == DOTTEDRECT_MODE) {
     float x0 = min(el.start.x, el.end.x);
     float y0 = min(el.start.y, el.end.y);
     float x1 = max(el.start.x, el.end.x);
     float y1 = max(el.start.y, el.end.y);
+    Rectangle filled = {x0 - tol, y0 - tol, (x1 - x0) + 2 * tol,
+                        (y1 - y0) + 2 * tol};
+    if (CheckCollisionPointRec(p, filled))
+      return true;
     Vector2 a = {x0, y0};
     Vector2 b = {x1, y0};
     Vector2 c = {x1, y1};
@@ -2665,7 +2669,9 @@ int main() {
           for (int idx : canvas.selectedIndices)
             if (idx == hitIndex)
               alreadySelected = true;
-          if (!alreadySelected) {
+          if (hitSelectedBounds) {
+            SaveBackup(canvas);
+          } else {
             RestoreZOrder(canvas);
             SaveBackup(canvas);
             Element selected = canvas.elements[hitIndex];
@@ -2673,8 +2679,7 @@ int main() {
             canvas.elements.erase(canvas.elements.begin() + hitIndex);
             canvas.elements.push_back(selected);
             canvas.selectedIndices = {(int)canvas.elements.size() - 1};
-          } else
-            SaveBackup(canvas);
+          }
           canvas.isBoxSelecting = false;
           canvas.boxSelectActive = false;
         } else {
