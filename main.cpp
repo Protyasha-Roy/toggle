@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <filesystem>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -48,6 +50,9 @@ struct AppConfig {
   string windowTitle = "Toggle : no more toggling";
   string defaultFontPath = "IosevkaNerdFontMono-Regular.ttf";
   int fontAtlasSize = 96;
+  string defaultSaveDir;
+  string defaultExportDir;
+  string defaultOpenDir;
   bool defaultDarkTheme = false;
   bool defaultShowTags = false;
   float defaultStrokeWidth = 2.0f;
@@ -592,6 +597,137 @@ string ToLower(string s) {
   return s;
 }
 
+bool IsPathSeparator(char c) { return c == '/' || c == '\\'; }
+
+string HomeDirectory() {
+  const char *home = getenv("HOME");
+  if (home && *home)
+    return home;
+  const char *userProfile = getenv("USERPROFILE");
+  if (userProfile && *userProfile)
+    return userProfile;
+  return ".";
+}
+
+string ExpandUserPath(string path) {
+  path = Trim(path);
+  if (path == "~")
+    return HomeDirectory();
+  if (path.rfind("~/", 0) == 0 || path.rfind("~\\", 0) == 0)
+    return HomeDirectory() + path.substr(1);
+  return path;
+}
+
+string DefaultDownloadsDir() {
+  filesystem::path p = filesystem::path(HomeDirectory()) / "Downloads";
+  if (filesystem::exists(p) && filesystem::is_directory(p))
+    return p.string();
+  return HomeDirectory();
+}
+
+bool LooksLikeDirPath(const string &value) {
+  if (value.empty())
+    return false;
+  if (value.back() == '/' || value.back() == '\\')
+    return true;
+  filesystem::path p(ExpandUserPath(value));
+  return filesystem::exists(p) && filesystem::is_directory(p);
+}
+
+bool HasDirectoryPart(const string &value) {
+  filesystem::path p(value);
+  return p.has_parent_path();
+}
+
+string StripQuotes(const string &s) {
+  string t = Trim(s);
+  if (t.size() >= 2) {
+    char a = t.front();
+    char b = t.back();
+    if ((a == '\'' && b == '\'') || (a == '"' && b == '"'))
+      return t.substr(1, t.size() - 2);
+  }
+  return t;
+}
+
+vector<string> TokenizeQuotedArgs(const string &raw) {
+  vector<string> tokens;
+  string current;
+  bool inQuote = false;
+  char quoteChar = '\0';
+  for (size_t i = 0; i < raw.size(); i++) {
+    char c = raw[i];
+    if (inQuote) {
+      if (c == quoteChar) {
+        inQuote = false;
+      } else if (c == '\\' && i + 1 < raw.size()) {
+        current.push_back(raw[++i]);
+      } else {
+        current.push_back(c);
+      }
+      continue;
+    }
+    if (c == '\'' || c == '"') {
+      inQuote = true;
+      quoteChar = c;
+      continue;
+    }
+    if (isspace((unsigned char)c)) {
+      if (!current.empty()) {
+        tokens.push_back(current);
+        current.clear();
+      }
+      continue;
+    }
+    current.push_back(c);
+  }
+  if (!current.empty())
+    tokens.push_back(current);
+  return tokens;
+}
+
+bool IsExportType(const string &v) {
+  string t = ToLower(Trim(v));
+  return t == "png" || t == "svg" || t == "jpg" || t == "jpeg";
+}
+
+string NormalizeExportType(const string &v) {
+  string t = ToLower(Trim(v));
+  if (t == "jpeg")
+    return "jpg";
+  return t;
+}
+
+string EnsureExt(string filename, const string &extNoDot) {
+  filesystem::path p(filename);
+  string ext = "." + extNoDot;
+  if (ToLower(p.extension().string()) != ToLower(ext))
+    p.replace_extension(ext);
+  return p.string();
+}
+
+string ResolveDefaultDir(const string &preferred, const string &fallback) {
+  string p = ExpandUserPath(preferred);
+  if (!p.empty())
+    return p;
+  return fallback;
+}
+
+bool EnsureDirectory(const string &dirPath) {
+  filesystem::path dir(ExpandUserPath(dirPath));
+  if (dir.empty())
+    return false;
+  if (filesystem::exists(dir))
+    return filesystem::is_directory(dir);
+  error_code ec;
+  return filesystem::create_directories(dir, ec);
+}
+
+string JoinPath(const string &dirPath, const string &fileName) {
+  filesystem::path p = filesystem::path(ExpandUserPath(dirPath)) / fileName;
+  return p.string();
+}
+
 string BackgroundTypeToString(BackgroundType t) {
   if (t == BG_GRID)
     return "grid";
@@ -830,6 +966,9 @@ void WriteDefaultConfig(const AppConfig &cfg) {
   out << "app.status_seconds=" << cfg.statusDurationSeconds << "\n";
   out << "font.default_path=" << cfg.defaultFontPath << "\n";
   out << "font.atlas_size=" << cfg.fontAtlasSize << "\n";
+  out << "path.default_save_dir=" << cfg.defaultSaveDir << "\n";
+  out << "path.default_export_dir=" << cfg.defaultExportDir << "\n";
+  out << "path.default_open_dir=" << cfg.defaultOpenDir << "\n";
   out << "canvas.theme_dark=" << (cfg.defaultDarkTheme ? "true" : "false") << "\n";
   out << "canvas.show_tags=" << (cfg.defaultShowTags ? "true" : "false") << "\n";
   out << "canvas.stroke_width=" << cfg.defaultStrokeWidth << "\n";
@@ -920,6 +1059,12 @@ void LoadConfig(AppConfig &cfg) {
       cfg.defaultFontPath = value;
     else if (key == "font.atlas_size" && ParseIntValue(value, iv))
       cfg.fontAtlasSize = max(16, iv);
+    else if (key == "path.default_save_dir")
+      cfg.defaultSaveDir = ExpandUserPath(value);
+    else if (key == "path.default_export_dir")
+      cfg.defaultExportDir = ExpandUserPath(value);
+    else if (key == "path.default_open_dir")
+      cfg.defaultOpenDir = ExpandUserPath(value);
     else if (key == "canvas.theme_dark" && ParseBool(value, bv))
       cfg.defaultDarkTheme = bv;
     else if (key == "canvas.show_tags" && ParseBool(value, bv))
@@ -995,6 +1140,12 @@ void LoadConfig(AppConfig &cfg) {
   cfg.maxTextSize = max(cfg.minTextSize, cfg.maxTextSize);
   cfg.defaultTextSize =
       min(cfg.maxTextSize, max(cfg.minTextSize, cfg.defaultTextSize));
+  if (cfg.defaultSaveDir.empty())
+    cfg.defaultSaveDir = DefaultDownloadsDir();
+  if (cfg.defaultExportDir.empty())
+    cfg.defaultExportDir = cfg.defaultSaveDir;
+  if (cfg.defaultOpenDir.empty())
+    cfg.defaultOpenDir = cfg.defaultSaveDir;
 }
 
 bool ParseHexColor(string hex, Color &outColor) {
@@ -1144,6 +1295,127 @@ bool SaveCanvasToFile(const Canvas &canvas, const string &path) {
   return true;
 }
 
+bool DeserializeElement(istream &in, Element &el) {
+  string tag;
+  if (!(in >> tag) || tag != "ELEMENT")
+    return false;
+  string line;
+  getline(in, line);
+  line = Trim(line);
+  stringstream ls(line);
+  int type = 0;
+  int r = 0, g = 0, b = 0, a = 255;
+  el.textSize = 24.0f;
+  if (!(ls >> type >> el.uniqueID >> el.strokeWidth >> r >> g >> b >> a >>
+        el.start.x >> el.start.y >> el.end.x >> el.end.y))
+    return false;
+  // Backward compatibility for files saved before textSize was serialized.
+  if (!(ls >> el.textSize))
+    el.textSize = 24.0f;
+  el.type = (Mode)type;
+  el.color = {(unsigned char)r, (unsigned char)g, (unsigned char)b,
+              (unsigned char)a};
+
+  size_t textLen = 0;
+  if (!(in >> tag >> textLen) || tag != "TEXT")
+    return false;
+  in.ignore(numeric_limits<streamsize>::max(), '\n');
+  string textLine;
+  getline(in, textLine);
+  el.text = textLine;
+
+  size_t pathCount = 0;
+  if (!(in >> tag >> pathCount) || tag != "PATH")
+    return false;
+  el.path.clear();
+  el.path.reserve(pathCount);
+  for (size_t i = 0; i < pathCount; i++) {
+    Vector2 p{};
+    if (!(in >> p.x >> p.y))
+      return false;
+    el.path.push_back(p);
+  }
+
+  size_t childCount = 0;
+  if (!(in >> tag >> childCount) || tag != "CHILDREN")
+    return false;
+  el.children.clear();
+  el.children.reserve(childCount);
+  for (size_t i = 0; i < childCount; i++) {
+    Element child;
+    if (!DeserializeElement(in, child))
+      return false;
+    el.children.push_back(child);
+  }
+
+  if (!(in >> tag) || tag != "END")
+    return false;
+  el.originalIndex = -1;
+  return true;
+}
+
+bool LoadCanvasFromFile(Canvas &canvas, const string &path) {
+  ifstream in(path);
+  if (!in.is_open())
+    return false;
+
+  string magic;
+  getline(in, magic);
+  if (Trim(magic) != "TOGGLE_V1")
+    return false;
+
+  string tag;
+  if (!(in >> tag) || tag != "TEXTSIZE")
+    return false;
+  in >> canvas.textSize;
+
+  if (!(in >> tag) || tag != "STROKEWIDTH")
+    return false;
+  in >> canvas.strokeWidth;
+
+  int r, g, b, a;
+  if (!(in >> tag) || tag != "DRAWCOLOR")
+    return false;
+  if (!(in >> r >> g >> b >> a))
+    return false;
+  canvas.drawColor = {(unsigned char)r, (unsigned char)g, (unsigned char)b,
+                      (unsigned char)a};
+
+  int bgType;
+  if (!(in >> tag) || tag != "GRIDTYPE")
+    return false;
+  if (!(in >> bgType))
+    return false;
+  canvas.bgType = (BackgroundType)bgType;
+
+  if (!(in >> tag) || tag != "GRIDWIDTH")
+    return false;
+  in >> canvas.gridWidth;
+
+  size_t count = 0;
+  if (!(in >> tag) || tag != "ELEMENT_COUNT")
+    return false;
+  if (!(in >> count))
+    return false;
+
+  vector<Element> loaded;
+  loaded.reserve(count);
+  for (size_t i = 0; i < count; i++) {
+    Element el;
+    if (!DeserializeElement(in, el))
+      return false;
+    loaded.push_back(el);
+  }
+
+  canvas.elements = loaded;
+  canvas.selectedIndices.clear();
+  canvas.undoStack.clear();
+  canvas.redoStack.clear();
+  canvas.isTextEditing = false;
+  canvas.commandMode = false;
+  return true;
+}
+
 string SvgEscape(const string &text) {
   string out;
   out.reserve(text.size());
@@ -1240,7 +1512,7 @@ bool ExportCanvasSvg(const Canvas &canvas, const string &filename) {
   return true;
 }
 
-bool ExportCanvasPng(const Canvas &canvas, const string &filename) {
+bool ExportCanvasRaster(const Canvas &canvas, const string &filename) {
   RenderTexture2D target = LoadRenderTexture(GetScreenWidth(), GetScreenHeight());
   BeginTextureMode(target);
   ClearBackground(canvas.backgroundColor);
@@ -1293,14 +1565,13 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
   if (command[0] == ':')
     command = command.substr(1);
   command = Trim(command);
-
-  string op = command;
-  string arg;
-  size_t spacePos = command.find(' ');
-  if (spacePos != string::npos) {
-    op = command.substr(0, spacePos);
-    arg = Trim(command.substr(spacePos + 1));
-  }
+  vector<string> tokens = TokenizeQuotedArgs(command);
+  if (tokens.empty())
+    return;
+  string op = tokens[0];
+  vector<string> args;
+  for (size_t i = 1; i < tokens.size(); i++)
+    args.push_back(StripQuotes(tokens[i]));
   string opLower = ToLower(op);
 
   if (opLower == "q") {
@@ -1308,12 +1579,40 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
     return;
   }
   if (opLower == "w" || opLower == "wq") {
-    string targetPath = canvas.savePath;
-    if (targetPath.empty()) {
-      targetPath = arg.empty() ? "untitled.toggle" : arg;
-      canvas.savePath = targetPath;
+    string targetPath;
+    if (args.empty()) {
+      targetPath = canvas.savePath;
+      if (targetPath.empty()) {
+        string dir = ResolveDefaultDir(cfg.defaultSaveDir, DefaultDownloadsDir());
+        targetPath = JoinPath(dir, "untitled.toggle");
+      }
+    } else if (args.size() == 1) {
+      filesystem::path p = ExpandUserPath(args[0]);
+      string filename = p.filename().string();
+      if (filename.empty())
+        filename = "untitled.toggle";
+      filename = EnsureExt(filename, "toggle");
+      if (p.has_parent_path()) {
+        targetPath = (p.parent_path() / filename).string();
+      } else {
+        string dir = ResolveDefaultDir(cfg.defaultSaveDir, DefaultDownloadsDir());
+        targetPath = JoinPath(dir, filename);
+      }
+    } else {
+      string filename = EnsureExt(args[0], "toggle");
+      string dir = ResolveDefaultDir(args[1], ResolveDefaultDir(cfg.defaultSaveDir,
+                                                                 DefaultDownloadsDir()));
+      targetPath = JoinPath(dir, filename);
     }
+
+    filesystem::path target = ExpandUserPath(targetPath);
+    if (!EnsureDirectory(target.parent_path().string())) {
+      SetStatus(canvas, cfg, "Save failed: could not create directory");
+      return;
+    }
+    targetPath = target.string();
     if (SaveCanvasToFile(canvas, targetPath)) {
+      canvas.savePath = targetPath;
       SetStatus(canvas, cfg, "Saved to " + targetPath);
       if (opLower == "wq")
         canvas.shouldQuit = true;
@@ -1322,8 +1621,44 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
     }
     return;
   }
+  if (opLower == "o" || opLower == "open") {
+    string sourcePath;
+    if (args.empty()) {
+      if (canvas.savePath.empty()) {
+        SetStatus(canvas, cfg, "Usage: :open 'filename' ['path']");
+        return;
+      }
+      sourcePath = canvas.savePath;
+    } else if (args.size() == 1) {
+      filesystem::path p = ExpandUserPath(args[0]);
+      if (p.extension().string().empty())
+        p.replace_extension(".toggle");
+      if (p.has_parent_path()) {
+        sourcePath = p.string();
+      } else {
+        string dir =
+            ResolveDefaultDir(cfg.defaultOpenDir, ResolveDefaultDir(cfg.defaultSaveDir,
+                                                                    DefaultDownloadsDir()));
+        sourcePath = JoinPath(dir, p.string());
+      }
+    } else {
+      string filename = args[0];
+      if (filesystem::path(filename).extension().string().empty())
+        filename = EnsureExt(filename, "toggle");
+      sourcePath = JoinPath(ResolveDefaultDir(args[1], cfg.defaultOpenDir), filename);
+    }
+
+    if (LoadCanvasFromFile(canvas, sourcePath)) {
+      canvas.savePath = sourcePath;
+      NormalizeCanvasIDs(canvas);
+      SetStatus(canvas, cfg, "Opened " + sourcePath);
+    } else {
+      SetStatus(canvas, cfg, "Open failed: " + sourcePath);
+    }
+    return;
+  }
   if (opLower == "theme") {
-    string v = ToLower(arg);
+    string v = args.empty() ? "" : ToLower(args[0]);
     if (v == "dark") {
       SetTheme(canvas, cfg, true);
       SetStatus(canvas, cfg, "Theme set to dark");
@@ -1337,7 +1672,8 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
   }
   if (opLower == "font") {
     float size = 0.0f;
-    if (!ParsePositiveFloat(arg, size) || size < cfg.minTextSize ||
+    if (args.empty() || !ParsePositiveFloat(args[0], size) ||
+        size < cfg.minTextSize ||
         size > cfg.maxTextSize) {
       SetStatus(canvas, cfg,
                 "Usage: :font [" + to_string((int)cfg.minTextSize) + "-" +
@@ -1363,17 +1699,17 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
     return;
   }
   if (opLower == "font-family") {
-    if (TryLoadFont(canvas, cfg, arg)) {
+    if (!args.empty() && TryLoadFont(canvas, cfg, args[0])) {
       for (auto &el : canvas.elements)
         RecomputeTextBoundsRecursive(el, canvas.font, canvas.textSize);
-      SetStatus(canvas, cfg, "Font family set to " + arg);
+      SetStatus(canvas, cfg, "Font family set to " + args[0]);
     } else
-      SetStatus(canvas, cfg, "Font load failed: " + arg);
+      SetStatus(canvas, cfg, "Font load failed");
     return;
   }
   if (opLower == "color") {
     Color c{};
-    if (!ParseHexColor(arg, c)) {
+    if (args.empty() || !ParseHexColor(args[0], c)) {
       SetStatus(canvas, cfg, "Usage: :color #RRGGBB or #RRGGBBAA");
       return;
     }
@@ -1395,7 +1731,8 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
   }
   if (opLower == "strokew") {
     float w = 0.0f;
-    if (!ParsePositiveFloat(arg, w) || w < cfg.minStrokeWidth ||
+    if (args.empty() || !ParsePositiveFloat(args[0], w) ||
+        w < cfg.minStrokeWidth ||
         w > cfg.maxStrokeWidth) {
       SetStatus(canvas, cfg,
                 "Usage: :strokew [" + to_string((int)cfg.minStrokeWidth) + "-" +
@@ -1420,7 +1757,8 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
   }
   if (opLower == "gridw") {
     float gw = 0.0f;
-    if (!ParsePositiveFloat(arg, gw) || gw < 6.0f || gw > 200.0f) {
+    if (args.empty() || !ParsePositiveFloat(args[0], gw) || gw < 6.0f ||
+        gw > 200.0f) {
       SetStatus(canvas, cfg, "Usage: :gridw [6-200]");
       return;
     }
@@ -1429,7 +1767,7 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
     return;
   }
   if (opLower == "type") {
-    string v = ToLower(arg);
+    string v = args.empty() ? "" : ToLower(args[0]);
     if (v == "blank") {
       canvas.bgType = BG_BLANK;
       SetStatus(canvas, cfg, "Canvas type: blank");
@@ -1447,7 +1785,7 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
   if (opLower == "resizet" || opLower == "resizeb" || opLower == "resizel" ||
       opLower == "resizer") {
     int delta = 0;
-    if (!ParseIntValue(arg, delta)) {
+    if (args.empty() || !ParseIntValue(args[0], delta)) {
       SetStatus(canvas, cfg, "Usage: :" + opLower + " [number]");
       return;
     }
@@ -1476,27 +1814,71 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
     return;
   }
   if (opLower == "export") {
-    string type = ToLower(arg);
-    string base = canvas.savePath.empty() ? "untitled" : canvas.savePath;
-    size_t dot = base.find_last_of('.');
-    if (dot != string::npos)
-      base = base.substr(0, dot);
+    vector<string> normalized;
+    normalized.reserve(args.size());
+    for (const auto &a : args)
+      normalized.push_back(StripQuotes(a));
 
-    if (type == "png") {
-      string outName = base + ".png";
-      if (ExportCanvasPng(canvas, outName))
-        SetStatus(canvas, cfg, "Exported " + outName);
-      else
-        SetStatus(canvas, cfg, "PNG export failed");
-    } else if (type == "svg") {
-      string outName = base + ".svg";
-      if (ExportCanvasSvg(canvas, outName))
-        SetStatus(canvas, cfg, "Exported " + outName);
-      else
-        SetStatus(canvas, cfg, "SVG export failed");
-    } else {
-      SetStatus(canvas, cfg, "Usage: :export png|svg");
+    int typeIdx = -1;
+    string type = "png";
+    for (int i = 0; i < (int)normalized.size(); i++) {
+      if (IsExportType(normalized[i])) {
+        typeIdx = i;
+        type = NormalizeExportType(normalized[i]);
+        break;
+      }
     }
+
+    vector<string> rest;
+    for (int i = 0; i < (int)normalized.size(); i++) {
+      if (i != typeIdx)
+        rest.push_back(normalized[i]);
+    }
+
+    filesystem::path basePath =
+        canvas.savePath.empty() ? filesystem::path("untitled")
+                                : filesystem::path(canvas.savePath).stem();
+    string filename = basePath.filename().string();
+    if (filename.empty())
+      filename = "untitled";
+    string outDir =
+        ResolveDefaultDir(cfg.defaultExportDir, ResolveDefaultDir(cfg.defaultSaveDir,
+                                                                  DefaultDownloadsDir()));
+
+    if (rest.size() == 1) {
+      if (LooksLikeDirPath(rest[0]))
+        outDir = ExpandUserPath(rest[0]);
+      else
+        filename = filesystem::path(rest[0]).stem().string();
+    } else if (rest.size() >= 2) {
+      if (typeIdx == 2 && normalized.size() >= 3) {
+        outDir = ExpandUserPath(rest[0]);
+        filename = filesystem::path(rest[1]).stem().string();
+      } else {
+        filename = filesystem::path(rest[0]).stem().string();
+        outDir = ExpandUserPath(rest[1]);
+      }
+    }
+
+    if (filename.empty())
+      filename = "untitled";
+    string outName = EnsureExt(filename, type);
+    if (!EnsureDirectory(outDir)) {
+      SetStatus(canvas, cfg, "Export failed: could not create directory");
+      return;
+    }
+    string fullPath = JoinPath(outDir, outName);
+
+    bool ok = false;
+    if (type == "svg")
+      ok = ExportCanvasSvg(canvas, fullPath);
+    else
+      ok = ExportCanvasRaster(canvas, fullPath);
+
+    if (ok)
+      SetStatus(canvas, cfg, "Exported " + fullPath);
+    else
+      SetStatus(canvas, cfg, "Export failed");
     return;
   }
 

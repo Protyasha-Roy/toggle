@@ -1,2 +1,26 @@
-toggle.txt
-toggle
+# Build artifacts
+/toggle
+/*.o
+/*.obj
+/*.out
+/*.a
+/*.so
+/*.dylib
+/*.dll
+/*.exe
+
+# App exports / generated output
+/*.png
+/*.jpg
+/*.jpeg
+/*.svg
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs / temp
+*.log
+*.tmp
