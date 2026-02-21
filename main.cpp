@@ -1,6 +1,11 @@
 #include "raylib.h"
 #include "raymath.h"
 #include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -22,6 +27,8 @@ enum Mode {
   PEN_MODE,
   GROUP_MODE,
 };
+
+enum BackgroundType { BG_BLANK, BG_GRID, BG_DOTTED };
 
 struct Element {
   Mode type;
@@ -116,6 +123,20 @@ struct Canvas {
   Vector2 lastClickPos = {0};
   int pasteOffsetIndex = 0;
   Camera2D camera = {};
+  bool commandMode = false;
+  string commandBuffer;
+  string statusMessage;
+  double statusUntil = 0.0;
+  bool shouldQuit = false;
+  bool darkTheme = false;
+  Color backgroundColor = WHITE;
+  Color uiTextColor = DARKGRAY;
+  Color drawColor = BLACK;
+  BackgroundType bgType = BG_BLANK;
+  float gridWidth = 24.0f;
+  string savePath;
+  string fontFamilyPath = "IosevkaNerdFontMono-Regular.ttf";
+  bool ownsFont = true;
 };
 
 void RestoreZOrder(Canvas &canvas);
@@ -451,9 +472,454 @@ void RestoreZOrder(Canvas &canvas) {
   canvas.selectedIndices.clear();
 }
 
+string Trim(const string &s) {
+  size_t begin = s.find_first_not_of(" \t\r\n");
+  if (begin == string::npos)
+    return "";
+  size_t end = s.find_last_not_of(" \t\r\n");
+  return s.substr(begin, end - begin + 1);
+}
+
+string ToLower(string s) {
+  for (char &c : s)
+    c = (char)tolower((unsigned char)c);
+  return s;
+}
+
+bool ParsePositiveFloat(const string &s, float &value) {
+  if (s.empty())
+    return false;
+  char *endPtr = nullptr;
+  value = strtof(s.c_str(), &endPtr);
+  return endPtr != s.c_str() && *endPtr == '\0';
+}
+
+bool ParseIntValue(const string &s, int &value) {
+  if (s.empty())
+    return false;
+  char *endPtr = nullptr;
+  long v = strtol(s.c_str(), &endPtr, 10);
+  if (endPtr == s.c_str() || *endPtr != '\0')
+    return false;
+  value = (int)v;
+  return true;
+}
+
+bool ParseHexColor(string hex, Color &outColor) {
+  if (!hex.empty() && hex[0] == '#')
+    hex.erase(hex.begin());
+  if (hex.size() != 6 && hex.size() != 8)
+    return false;
+  for (char c : hex) {
+    if (!isxdigit((unsigned char)c))
+      return false;
+  }
+  auto byteFromHex = [](const string &s) -> unsigned char {
+    return (unsigned char)strtol(s.c_str(), nullptr, 16);
+  };
+  outColor.r = byteFromHex(hex.substr(0, 2));
+  outColor.g = byteFromHex(hex.substr(2, 2));
+  outColor.b = byteFromHex(hex.substr(4, 2));
+  outColor.a = (hex.size() == 8) ? byteFromHex(hex.substr(6, 2)) : 255;
+  return true;
+}
+
+string ColorToHex(Color c) {
+  return TextFormat("#%02X%02X%02X%02X", c.r, c.g, c.b, c.a);
+}
+
+void SetStatus(Canvas &canvas, const string &message, double seconds = 2.0) {
+  canvas.statusMessage = message;
+  canvas.statusUntil = GetTime() + seconds;
+}
+
+void SetTheme(Canvas &canvas, bool dark) {
+  canvas.darkTheme = dark;
+  if (dark) {
+    canvas.backgroundColor = {24, 26, 31, 255};
+    canvas.uiTextColor = {220, 222, 228, 255};
+  } else {
+    canvas.backgroundColor = WHITE;
+    canvas.uiTextColor = DARKGRAY;
+  }
+}
+
+void DrawBackgroundPattern(const Canvas &canvas) {
+  if (canvas.bgType == BG_BLANK)
+    return;
+
+  float spacing = max(6.0f, canvas.gridWidth);
+  float left = canvas.camera.target.x - canvas.camera.offset.x / canvas.camera.zoom;
+  float top = canvas.camera.target.y - canvas.camera.offset.y / canvas.camera.zoom;
+  float right =
+      canvas.camera.target.x + (float)GetScreenWidth() / canvas.camera.zoom;
+  float bottom =
+      canvas.camera.target.y + (float)GetScreenHeight() / canvas.camera.zoom;
+
+  float startX = floorf(left / spacing) * spacing;
+  float startY = floorf(top / spacing) * spacing;
+  Color lineColor = canvas.darkTheme ? Fade(RAYWHITE, 0.12f) : Fade(BLACK, 0.12f);
+
+  if (canvas.bgType == BG_GRID) {
+    for (float x = startX; x <= right + spacing; x += spacing)
+      DrawLineV({x, top - spacing}, {x, bottom + spacing}, lineColor);
+    for (float y = startY; y <= bottom + spacing; y += spacing)
+      DrawLineV({left - spacing, y}, {right + spacing, y}, lineColor);
+  } else if (canvas.bgType == BG_DOTTED) {
+    for (float x = startX; x <= right + spacing; x += spacing) {
+      for (float y = startY; y <= bottom + spacing; y += spacing) {
+        DrawCircleV({x, y}, 1.4f, lineColor);
+      }
+    }
+  }
+}
+
+void SerializeElement(ofstream &out, const Element &el) {
+  out << "ELEMENT " << (int)el.type << " " << el.uniqueID << " "
+      << el.strokeWidth << " " << (int)el.color.r << " " << (int)el.color.g
+      << " " << (int)el.color.b << " " << (int)el.color.a << " " << el.start.x
+      << " " << el.start.y << " " << el.end.x << " " << el.end.y << "\n";
+  out << "TEXT " << el.text.size() << "\n" << el.text << "\n";
+  out << "PATH " << el.path.size() << "\n";
+  for (const auto &p : el.path)
+    out << p.x << " " << p.y << "\n";
+  out << "CHILDREN " << el.children.size() << "\n";
+  for (const auto &c : el.children)
+    SerializeElement(out, c);
+  out << "END\n";
+}
+
+bool SaveCanvasToFile(const Canvas &canvas, const string &path) {
+  ofstream out(path);
+  if (!out.is_open())
+    return false;
+  out << "TOGGLE_V1\n";
+  out << "TEXTSIZE " << canvas.textSize << "\n";
+  out << "STROKEWIDTH " << canvas.strokeWidth << "\n";
+  out << "DRAWCOLOR " << (int)canvas.drawColor.r << " " << (int)canvas.drawColor.g
+      << " " << (int)canvas.drawColor.b << " " << (int)canvas.drawColor.a << "\n";
+  out << "GRIDTYPE " << (int)canvas.bgType << "\n";
+  out << "GRIDWIDTH " << canvas.gridWidth << "\n";
+  out << "ELEMENT_COUNT " << canvas.elements.size() << "\n";
+  for (const auto &el : canvas.elements)
+    SerializeElement(out, el);
+  return true;
+}
+
+string SvgEscape(const string &text) {
+  string out;
+  out.reserve(text.size());
+  for (char c : text) {
+    if (c == '&')
+      out += "&amp;";
+    else if (c == '<')
+      out += "&lt;";
+    else if (c == '>')
+      out += "&gt;";
+    else if (c == '"')
+      out += "&quot;";
+    else if (c == '\'')
+      out += "&apos;";
+    else
+      out.push_back(c);
+  }
+  return out;
+}
+
+void WriteSvgElement(ofstream &out, const Element &el, const string &fontFamily,
+                     float textSize, const Camera2D &camera) {
+  string stroke = TextFormat("rgb(%d,%d,%d)", el.color.r, el.color.g, el.color.b);
+  Vector2 s = GetWorldToScreen2D(el.start, camera);
+  Vector2 e = GetWorldToScreen2D(el.end, camera);
+  float scaledStroke = max(0.5f, el.strokeWidth * camera.zoom);
+  float scaledTextSize = max(6.0f, textSize * camera.zoom);
+  if (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE || el.type == ARROWLINE_MODE) {
+    out << "<line x1=\"" << s.x << "\" y1=\"" << s.y << "\" x2=\""
+        << e.x << "\" y2=\"" << e.y << "\" stroke=\"" << stroke
+        << "\" stroke-width=\"" << scaledStroke << "\"";
+    if (el.type == DOTTEDLINE_MODE)
+      out << " stroke-dasharray=\"8,6\"";
+    out << " fill=\"none\" />\n";
+  } else if (el.type == RECTANGLE_MODE || el.type == DOTTEDRECT_MODE) {
+    float x = min(s.x, e.x);
+    float y = min(s.y, e.y);
+    float w = fabsf(e.x - s.x);
+    float h = fabsf(e.y - s.y);
+    out << "<rect x=\"" << x << "\" y=\"" << y << "\" width=\"" << w
+        << "\" height=\"" << h << "\" stroke=\"" << stroke
+        << "\" stroke-width=\"" << scaledStroke << "\" fill=\"none\"";
+    if (el.type == DOTTEDRECT_MODE)
+      out << " stroke-dasharray=\"8,6\"";
+    out << " />\n";
+  } else if (el.type == CIRCLE_MODE || el.type == DOTTEDCIRCLE_MODE) {
+    float r = Vector2Distance(s, e);
+    out << "<circle cx=\"" << s.x << "\" cy=\"" << s.y
+        << "\" r=\"" << r << "\" stroke=\"" << stroke << "\" stroke-width=\""
+        << scaledStroke << "\" fill=\"none\"";
+    if (el.type == DOTTEDCIRCLE_MODE)
+      out << " stroke-dasharray=\"8,6\"";
+    out << " />\n";
+  } else if (el.type == PEN_MODE) {
+    if (el.path.size() >= 2) {
+      out << "<polyline points=\"";
+      for (const auto &p : el.path) {
+        Vector2 sp = GetWorldToScreen2D(p, camera);
+        out << sp.x << "," << sp.y << " ";
+      }
+      out << "\" stroke=\"" << stroke << "\" stroke-width=\"" << scaledStroke
+          << "\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\" />\n";
+    } else if (el.path.size() == 1) {
+      Vector2 sp = GetWorldToScreen2D(el.path[0], camera);
+      out << "<circle cx=\"" << sp.x << "\" cy=\"" << sp.y
+          << "\" r=\"" << max(0.5f, el.strokeWidth * 0.5f * camera.zoom)
+          << "\" fill=\""
+          << stroke << "\" />\n";
+    }
+  } else if (el.type == TEXT_MODE) {
+    out << "<text x=\"" << s.x << "\" y=\"" << (s.y + scaledTextSize)
+        << "\" fill=\"" << stroke << "\" font-family=\"" << SvgEscape(fontFamily)
+        << "\" font-size=\"" << scaledTextSize << "\">" << SvgEscape(el.text)
+        << "</text>\n";
+  } else if (el.type == GROUP_MODE) {
+    for (const auto &child : el.children)
+      WriteSvgElement(out, child, fontFamily, textSize, camera);
+  }
+}
+
+bool ExportCanvasSvg(const Canvas &canvas, const string &filename) {
+  ofstream out(filename);
+  if (!out.is_open())
+    return false;
+  int w = GetScreenWidth();
+  int h = GetScreenHeight();
+  out << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" << w
+      << "\" height=\"" << h << "\" viewBox=\"0 0 " << w << " " << h << "\">\n";
+  out << "<rect width=\"100%\" height=\"100%\" fill=\"white\" />\n";
+  for (const auto &el : canvas.elements)
+    WriteSvgElement(out, el, canvas.fontFamilyPath, canvas.textSize, canvas.camera);
+  out << "</svg>\n";
+  return true;
+}
+
+bool ExportCanvasPng(const Canvas &canvas, const string &filename) {
+  RenderTexture2D target = LoadRenderTexture(GetScreenWidth(), GetScreenHeight());
+  BeginTextureMode(target);
+  ClearBackground(canvas.backgroundColor);
+  BeginMode2D(canvas.camera);
+  DrawBackgroundPattern(canvas);
+  for (const auto &el : canvas.elements)
+    DrawElement(el, canvas.font, canvas.textSize);
+  EndMode2D();
+  EndTextureMode();
+
+  Image img = LoadImageFromTexture(target.texture);
+  ImageFlipVertical(&img);
+  bool ok = ExportImage(img, filename.c_str());
+  UnloadImage(img);
+  UnloadRenderTexture(target);
+  return ok;
+}
+
+bool TryLoadFont(Canvas &canvas, const string &nameOrPath) {
+  string path = Trim(nameOrPath);
+  if (path.empty())
+    return false;
+  if (ToLower(path) == "default") {
+    if (canvas.ownsFont)
+      UnloadFont(canvas.font);
+    canvas.font = GetFontDefault();
+    canvas.ownsFont = false;
+    canvas.fontFamilyPath = "default";
+    return true;
+  }
+  if (!FileExists(path.c_str()))
+    return false;
+  Font newFont = LoadFont(path.c_str());
+  if (newFont.texture.id == 0)
+    return false;
+  SetTextureFilter(newFont.texture, TEXTURE_FILTER_BILINEAR);
+  if (canvas.ownsFont)
+    UnloadFont(canvas.font);
+  canvas.font = newFont;
+  canvas.ownsFont = true;
+  canvas.fontFamilyPath = path;
+  return true;
+}
+
+void ExecuteCommand(Canvas &canvas, string command) {
+  command = Trim(command);
+  if (command.empty())
+    return;
+  if (command[0] == ':')
+    command = command.substr(1);
+  command = Trim(command);
+
+  string op = command;
+  string arg;
+  size_t spacePos = command.find(' ');
+  if (spacePos != string::npos) {
+    op = command.substr(0, spacePos);
+    arg = Trim(command.substr(spacePos + 1));
+  }
+  string opLower = ToLower(op);
+
+  if (opLower == "q") {
+    canvas.shouldQuit = true;
+    return;
+  }
+  if (opLower == "w" || opLower == "wq") {
+    string targetPath = canvas.savePath;
+    if (targetPath.empty()) {
+      targetPath = arg.empty() ? "untitled.toggle" : arg;
+      canvas.savePath = targetPath;
+    }
+    if (SaveCanvasToFile(canvas, targetPath)) {
+      SetStatus(canvas, "Saved to " + targetPath);
+      if (opLower == "wq")
+        canvas.shouldQuit = true;
+    } else {
+      SetStatus(canvas, "Save failed: " + targetPath);
+    }
+    return;
+  }
+  if (opLower == "theme") {
+    string v = ToLower(arg);
+    if (v == "dark") {
+      SetTheme(canvas, true);
+      SetStatus(canvas, "Theme set to dark");
+    } else if (v == "light") {
+      SetTheme(canvas, false);
+      SetStatus(canvas, "Theme set to light");
+    } else {
+      SetStatus(canvas, "Usage: :theme dark|light");
+    }
+    return;
+  }
+  if (opLower == "font") {
+    float size = 0.0f;
+    if (!ParsePositiveFloat(arg, size) || size < 6.0f || size > 200.0f) {
+      SetStatus(canvas, "Usage: :font [6-200]");
+      return;
+    }
+    canvas.textSize = size;
+    SetStatus(canvas, "Font size set to " + to_string((int)size));
+    return;
+  }
+  if (opLower == "font-family") {
+    if (TryLoadFont(canvas, arg))
+      SetStatus(canvas, "Font family set to " + arg);
+    else
+      SetStatus(canvas, "Font load failed: " + arg);
+    return;
+  }
+  if (opLower == "color") {
+    Color c{};
+    if (!ParseHexColor(arg, c)) {
+      SetStatus(canvas, "Usage: :color #RRGGBB or #RRGGBBAA");
+      return;
+    }
+    canvas.drawColor = c;
+    SetStatus(canvas, "Draw color set to " + ColorToHex(c));
+    return;
+  }
+  if (opLower == "strokew") {
+    float w = 0.0f;
+    if (!ParsePositiveFloat(arg, w) || w < 1.0f || w > 100.0f) {
+      SetStatus(canvas, "Usage: :strokew [1-100]");
+      return;
+    }
+    canvas.strokeWidth = w;
+    SetStatus(canvas, "Stroke width set");
+    return;
+  }
+  if (opLower == "gridw") {
+    float gw = 0.0f;
+    if (!ParsePositiveFloat(arg, gw) || gw < 6.0f || gw > 200.0f) {
+      SetStatus(canvas, "Usage: :gridw [6-200]");
+      return;
+    }
+    canvas.gridWidth = gw;
+    SetStatus(canvas, "Grid spacing set");
+    return;
+  }
+  if (opLower == "type") {
+    string v = ToLower(arg);
+    if (v == "blank") {
+      canvas.bgType = BG_BLANK;
+      SetStatus(canvas, "Canvas type: blank");
+    } else if (v == "grid") {
+      canvas.bgType = BG_GRID;
+      SetStatus(canvas, "Canvas type: grid");
+    } else if (v == "dotted") {
+      canvas.bgType = BG_DOTTED;
+      SetStatus(canvas, "Canvas type: dotted");
+    } else {
+      SetStatus(canvas, "Usage: :type blank|grid|dotted");
+    }
+    return;
+  }
+  if (opLower == "resizet" || opLower == "resizeb" || opLower == "resizel" ||
+      opLower == "resizer") {
+    int delta = 0;
+    if (!ParseIntValue(arg, delta)) {
+      SetStatus(canvas, "Usage: :" + opLower + " [number]");
+      return;
+    }
+    int minW = 320;
+    int minH = 240;
+    int x = GetWindowPosition().x;
+    int y = GetWindowPosition().y;
+    int w = GetScreenWidth();
+    int h = GetScreenHeight();
+    if (opLower == "resizet") {
+      y -= delta;
+      h += delta;
+    } else if (opLower == "resizeb") {
+      h += delta;
+    } else if (opLower == "resizel") {
+      x -= delta;
+      w += delta;
+    } else if (opLower == "resizer") {
+      w += delta;
+    }
+    w = max(minW, w);
+    h = max(minH, h);
+    SetWindowSize(w, h);
+    SetWindowPosition(x, y);
+    SetStatus(canvas, "Window resized");
+    return;
+  }
+  if (opLower == "export") {
+    string type = ToLower(arg);
+    string base = canvas.savePath.empty() ? "untitled" : canvas.savePath;
+    size_t dot = base.find_last_of('.');
+    if (dot != string::npos)
+      base = base.substr(0, dot);
+
+    if (type == "png") {
+      string outName = base + ".png";
+      if (ExportCanvasPng(canvas, outName))
+        SetStatus(canvas, "Exported " + outName);
+      else
+        SetStatus(canvas, "PNG export failed");
+    } else if (type == "svg") {
+      string outName = base + ".svg";
+      if (ExportCanvasSvg(canvas, outName))
+        SetStatus(canvas, "Exported " + outName);
+      else
+        SetStatus(canvas, "SVG export failed");
+    } else {
+      SetStatus(canvas, "Usage: :export png|svg");
+    }
+    return;
+  }
+
+  SetStatus(canvas, "Unknown command: " + op);
+}
+
 int main() {
-  const int screenWidth = 1000;
-  const int screenHeight = 800;
+  int screenWidth = 1000;
+  int screenHeight = 800;
   Canvas canvas;
   SetConfigFlags(FLAG_MSAA_4X_HINT);
   InitWindow(screenWidth, screenHeight, "Toggle : no more toggling");
@@ -465,6 +931,7 @@ int main() {
   canvas.camera.zoom = 1.0f;
   canvas.font = LoadFont("IosevkaNerdFontMono-Regular.ttf");
   SetTextureFilter(canvas.font.texture, TEXTURE_FILTER_BILINEAR);
+  SetTheme(canvas, false);
 
   while (!WindowShouldClose()) {
     bool escPressed = IsKeyPressed(KEY_ESCAPE);
@@ -480,6 +947,39 @@ int main() {
     Vector2 mouseScreen = GetMousePosition();
     Vector2 mouseWorld = GetScreenToWorld2D(mouseScreen, canvas.camera);
 
+    if (!canvas.isTextEditing && !canvas.commandMode &&
+        shiftDown && IsKeyPressed(KEY_SEMICOLON)) {
+      canvas.commandMode = true;
+      canvas.commandBuffer.clear();
+    }
+
+    if (canvas.commandMode) {
+      if (escPressed) {
+        canvas.commandMode = false;
+        canvas.commandBuffer.clear();
+      } else {
+        int c = GetCharPressed();
+        while (c > 0) {
+          if (c >= 32 && c < 127 &&
+              !(canvas.commandBuffer.empty() && c == ':'))
+            canvas.commandBuffer.push_back((char)c);
+          c = GetCharPressed();
+        }
+        if (IsKeyPressed(KEY_BACKSPACE) && !canvas.commandBuffer.empty()) {
+          canvas.commandBuffer.pop_back();
+        }
+        if (IsKeyPressed(KEY_ENTER)) {
+          ExecuteCommand(canvas, ":" + canvas.commandBuffer);
+          canvas.commandMode = false;
+          canvas.commandBuffer.clear();
+        }
+      }
+    }
+
+    if (canvas.shouldQuit)
+      break;
+
+    if (!canvas.commandMode) {
     float wheel = GetMouseWheelMove();
     if (wheel != 0.0f) {
       float oldZoom = canvas.camera.zoom;
@@ -689,7 +1189,7 @@ int main() {
         Element group;
         group.type = GROUP_MODE;
         group.strokeWidth = canvas.strokeWidth;
-        group.color = canvas.modeColor;
+        group.color = canvas.drawColor;
         group.uniqueID =
             canvas.nextElementId++; // assign ID to the group itself
 
@@ -1009,7 +1509,7 @@ int main() {
           newEl.start = m;
           newEl.end = {m.x + 10.0f, m.y + canvas.textSize};
           newEl.strokeWidth = canvas.strokeWidth;
-          newEl.color = canvas.modeColor;
+          newEl.color = canvas.drawColor;
           newEl.originalIndex = -1;
           newEl.uniqueID = canvas.nextElementId++;
           newEl.text = "";
@@ -1020,7 +1520,7 @@ int main() {
           canvas.editingIndex = (int)canvas.elements.size() - 1;
           canvas.editingOriginalText.clear();
           canvas.textBuffer.clear();
-          canvas.editingColor = canvas.modeColor;
+          canvas.editingColor = canvas.drawColor;
           canvas.textEditBackedUp = true;
         }
       }
@@ -1087,7 +1587,7 @@ int main() {
           newEl.start = canvas.startPoint;
           newEl.end = canvas.currentMouse;
           newEl.strokeWidth = canvas.strokeWidth;
-          newEl.color = canvas.modeColor;
+          newEl.color = canvas.drawColor;
           newEl.originalIndex = -1;
 
           // Assign the permanent ID and increment the counter
@@ -1100,10 +1600,13 @@ int main() {
       }
     }
 
+    } // end non-command input handling
+
     // --- Drawing
     BeginDrawing();
-    ClearBackground(WHITE);
+    ClearBackground(canvas.backgroundColor);
     BeginMode2D(canvas.camera);
+    DrawBackgroundPattern(canvas);
 
     for (size_t i = 0; i < canvas.elements.size(); i++) {
       if (canvas.mode == TEXT_MODE && canvas.isTextEditing &&
@@ -1154,7 +1657,7 @@ int main() {
         preview.start = canvas.startPoint;
         preview.end = m;
         preview.strokeWidth = canvas.strokeWidth;
-        preview.color = Fade(canvas.modeColor, 0.5f);
+        preview.color = Fade(canvas.drawColor, 0.5f);
         if (canvas.mode == PEN_MODE)
           preview.path = canvas.currentPath;
         DrawElement(preview, canvas.font, canvas.textSize);
@@ -1168,12 +1671,38 @@ int main() {
                  canvas.textSize, 2, Fade(canvas.editingColor, 0.7f));
     }
     EndMode2D();
-    DrawTextEx(canvas.font, "Current Mode:", {10, 10}, 24, 2, DARKGRAY);
+    Color modeDisplayColor =
+        (canvas.darkTheme && canvas.modeColor.r < 32 && canvas.modeColor.g < 32 &&
+         canvas.modeColor.b < 32)
+            ? RAYWHITE
+            : canvas.modeColor;
+    DrawTextEx(canvas.font, "Current Mode:", {10, 10}, 24, 2, canvas.uiTextColor);
     DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2,
-               canvas.modeColor);
+               modeDisplayColor);
+    DrawTextEx(canvas.font, TextFormat("Stroke: %.1f  Color: %s", canvas.strokeWidth,
+                                       ColorToHex(canvas.drawColor).c_str()),
+               {10, 42}, 18, 2, canvas.uiTextColor);
+
+    if (!canvas.statusMessage.empty() && GetTime() <= canvas.statusUntil) {
+      DrawRectangle(10, 70, 520, 28, Fade(canvas.darkTheme ? BLACK : WHITE, 0.85f));
+      DrawRectangleLines(10, 70, 520, 28, Fade(canvas.uiTextColor, 0.7f));
+      DrawTextEx(canvas.font, canvas.statusMessage.c_str(), {18, 75}, 16, 1.5f,
+                 canvas.uiTextColor);
+    }
+
+    if (canvas.commandMode) {
+      int h = 34;
+      int y = GetScreenHeight() - h;
+      DrawRectangle(0, y, GetScreenWidth(), h, canvas.darkTheme ? BLACK : LIGHTGRAY);
+      DrawRectangleLines(0, y, GetScreenWidth(), h, Fade(canvas.uiTextColor, 0.6f));
+      string line = ":" + canvas.commandBuffer + "_";
+      DrawTextEx(canvas.font, line.c_str(), {10, (float)y + 8.0f}, 20, 2,
+                 canvas.uiTextColor);
+    }
     EndDrawing();
   }
-  UnloadFont(canvas.font);
+  if (canvas.ownsFont)
+    UnloadFont(canvas.font);
   CloseWindow();
   return 0;
 }

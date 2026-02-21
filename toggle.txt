@@ -1,0 +1,70 @@
+Toggle: a modal, keyboard-driven,  minimalist graphics tool
+--------------------------------------------------------------------
+Key-features with respective keybindings:
+s: selection mode - DONE 
+m: move mode - DONE
+dl: dotted line mode - DONE
+l: straight line mode - DONE
+al: arrow line mode - DONE
+c: circle mode - DONE
+dc: dotted circle mode - DONE
+r: rectangle mode - DONE
+dr: dotted rectangle mode - DONE
+t: text mode - DONE
++: zoom in - DONE
+_: zoom out - DONE
+g: group selection - DONE
+G: ungroup selection - DONE
+y: yank/copy selection - DONE
+u: undo - DONE 
+U: redo - DONE
+x: delete selection - DONE
+p: pen/pencil mode - DONE
+P: paste yanked element - DONE
+e: eraser mode - DONE
+[: z-index bring backward - DONE
+]: z-index bring forward - DONE
+esc: to stop quit command mode/to stop taking input a keybinding/to escape text mode and anything else - UNDONE
+=: increase stroke width - DONE
+-: decrease stroke width - DONE
+f: show/hide numbered hints - DONE
+
+While in selection mode:
+j: go to the next numbered element - DONE 
+k: go to the previous numbered element - DONE
+[number]: takes to that numbered element directly - DONE
+
+
+Other command driven features:
+:q // quit app
+:theme dark/light // change theme
+:font [number] // font-size for text
+:font-family [name-of-the-font] // font-family
+:resizet [number] // resize top
+:resizeb [number] // resize bottom
+:resizer [number] // resize right
+:resizel [number] // resize left
+:color [hex-code] // set color
+:strokew [number] // stroke width
+:type [string]    // Three types: blank, grid, dotted
+:gridw [number]   // grid size
+:w [filename]     // Save as 'filename' only if not already saved, otherwise :w should save it with the default name, or the previous name(if given before).
+:wq               // Save and quit
+:export [png/svg] // Export
+
+
+Other mouse related features:
+resizing elements with mouse - UNDONE
+moving elements with mouse - DONE
+selecting to perform actions(with or without-keyboard(command drivens)) - DONE
+zooming in and out - DONE
+moving the canvas - DONE
+
+Other:
+One config file to config everything(the defaults). - UNDONE
+This config file should also let user change default keybindings - UNDONE
+and all other defaults.
+
+Each element when inserted will show a number tag by default. So that it's easier to navigate between the elements. - DONE
+But while exporting these numbered tags will not longer be visible in the exported image. 
+Vim-like Status bar - UNDONE
