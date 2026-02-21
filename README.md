@@ -1,4 +1,4 @@
- toggle
+# toggle
 
 Fast, keyboard‑driven drawing app built with raylib.
 
