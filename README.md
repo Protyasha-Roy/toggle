@@ -1,102 +1,13 @@
-# toggle
+# Toggle : A simple and keyboard-friendly graphics drawing tool.
+Built with C++ and Raylib.
 
-Fast, keyboard‑driven drawing app built with raylib.
-
-## Installation
-First install dependencies. You must have raylib. Gcc compiler.
-Compilation command:
-g++ main.cpp -lraylib -lGL -lm -lpthread -ldl -lrt -o toggle
-
-Next steps:
 1. Clone the repo
-2. cd into the folder toggle
-3. type ./toggle to quickly run the project
-4. In order to make a desktop entry for app launcher:
-  a. Copy paste the toggle.desktop to ~/.local/share/applications
-  b. Open the .desktop entry and replace paths with actual path to the toggle executable and the toggle folder
-  c. Search for the project from app launcher.
 
-## Cheatsheet
+2. Compile with 'g++ main.cpp -lraylib -lGL -lm -lpthread -ldl -lrt -o toggle' [install necessary dependencies]
 
-### Modes
-- `s` Selection
-- `m` Move (pan)
-- `p` Pen
-- `l` Line
-- `c` Circle
-- `r` Rectangle
-- `R` or `Shift+R` Resize/Rotate
-- `e` Eraser
-- `t` Text
+3. Run ./toggle 
 
-### Mode prefixes (press before the mode key)
-- `d` dotted (line, circle, rectangle)
-- `a` arrow (line only)
-dt : dotted line
-dc : dotted circle
-al : arrow line
-dr : dotted rectangle
-
-### Mouse basics
-- Selection: click to select, drag selected to move, drag empty space to box‑select.
-- Resize/Rotate: drag handles to resize, drag rotate handle to rotate, drag inside to move.
-- Text: click text to edit, click empty space to place.
-- Move mode: drag to pan.
-- Pen/shape modes: click‑drag to draw.
-
-### Selection & order
-- `Ctrl+A` select all
-- `X` delete selection
-- `[` move selection backward
-- `]` move selection forward
-- `G` group selected
-- `Shift+G` ungroup
-- `F` toggle element ID tags
-- `J` / `K` select next/previous tag
-- Number keys select element by ID (when tags are visible)
-
-### Edit & history
-- `U` or `Ctrl+Z` undo
-- `Shift+U`, `Ctrl+Y`, or `Ctrl+Shift+Z` redo
-- `Y` copy
-- `Shift+P` paste
-- `=` / `-` increase/decrease stroke width
-
-### View
-- Mouse wheel zoom
-- `Shift+=` / `Shift+-` zoom in/out (also `KP+` / `KP-`)
-- `Tab` toggle status bar
-
-### Command mode
-Press `Shift+;` to open command mode, then type commands:
-
-**File**
-- `:w [filename] [dir]` save
-- `:wq` save and quit
-- `:q` quit
-- `:open` or `:o` open last saved
-- `:open <filename> [dir]` open file
-
-**Appearance**
-- `:theme dark|light`
-- `:type blank|grid|dotted`
-- `:gridw <6-200>` grid spacing
-- `:color <#RRGGBB|#RRGGBBAA|name>` set color (applies to selection if any)
-- `:strokew <min-max>` set stroke width (applies to selection if any)
-- `:font <size>` set text size (applies to selected text if any)
-- `:font-family <path>` load a font file
-
-**Export**
-- `:export [png|jpg|svg] [all|selected|frame] [name] [dir]`
-
-**Window**
-- `:resizet <px>` / `:resizeb <px>` / `:resizel <px>` / `:resizer <px>`
-
-**Config**
-- `:reloadconfig`
-- `:writeconfig`
-
-## Features (complete)
+## Features summary
 - Freehand pen drawing.
 - Lines (solid, dotted, arrow).
 - Circles (solid, dotted).
@@ -116,81 +27,68 @@ Press `Shift+;` to open command mode, then type commands:
 - Dark/light themes.
 - Background types: blank, grid, dotted.
 - Export to PNG/JPG/SVG (all/selected/frame).
-- Config reload/write and runtime commands.
 
 
+# Toggle Cheatsheet
 
-## Summary
-### Toggle: a modal, keyboard-driven,  minimalist graphics tool
+### Modes
 
-Key-features with respective keybindings:
-s: selection mode - DONE 
-m: move mode - DONE
-dl: dotted line mode - DONE
-l: straight line mode - DONE
-al: arrow line mode - DONE
-c: circle mode - DONE
-dc: dotted circle mode - DONE
-r: rectangle mode - DONE
-dr: dotted rectangle mode - DONE
-t: text mode - DONE
-+: zoom in - DONE
-_: zoom out - DONE
-g: group selection - DONE
-G: ungroup selection - DONE
-y: yank/copy selection - DONE
-u: undo - DONE 
-U: redo - DONE
-x: delete selection - DONE
-p: pen/pencil mode - DONE
-P: paste yanked element - DONE
-e: eraser mode - DONE
-[: z-index bring backward - DONE
-]: z-index bring forward - DONE
-esc: to stop quit command mode/to stop taking input a keybinding/to escape text mode and anything else - DONE
-=: increase stroke width - DONE
--: decrease stroke width - DONE
-f: show/hide numbered hints - DONE
-shift+R: resize/rotate mode - DONE
+| Key | Action | Key | Action |
+| --- | --- | --- | --- |
+| `s` | Selection mode | `p` | Pen/Pencil mode |
+| `m` | Move mode | `e` | Eraser mode |
+| `t` | Text mode | `shift+R` | Resize/Rotate mode |
+| `l` | Straight line | `dl` | Dotted line |
+| `al` | Arrow line | `c` | Circle |
+| `dc` | Dotted circle | `r` | Rectangle |
+| `dr` | Dotted rectangle | `f` | Toggle numbered hints |
 
-While in selection mode:
-j: go to the next numbered element - DONE 
-k: go to the previous numbered element - DONE
-[number]: takes to that numbered element directly - DONE
+### Actions
 
+| Key | Action | Key | Action |
+| --- | --- | --- | --- |
+| `y` | Yank (Copy) | `P` | Paste |
+| `x` | Delete selection | `g` | Group selection |
+| `u` | Undo | `G` | Ungroup selection |
+| `U` | Redo | `[` | Send backward |
+| `+` | Zoom in | `]` | Bring forward |
+| `_` | Zoom out | `=` | Increase stroke width |
+| `esc` | Stop/Quit/Exit | `-` | Decrease stroke width |
 
-Other command driven features:
-:q // quit app
-:theme dark/light // change theme
-:font [number] // font-size for text
-:font-family [name-of-the-font] // font-family
-:resizet [number] // resize top
-:resizeb [number] // resize bottom
-:resizer [number] // resize right
-:resizel [number] // resize left
-:color [hex-code] // set color
-:strokew [number] // stroke width
-:type [string]    // Three types: blank, grid, dotted
-:gridw [number]   // grid size
-:w [filename]     // Save as 'filename' only if not already saved, otherwise :w should save it with the default name, or the previous name(if given before).
-:wq               // Save and quit
-:export [png/svg] // Export
-:open 'filepath/name' // open toggle file
+### Selection Mode (Active)
 
-Other mouse related features:
-resizing elements with mouse - DONE
-rotating elements with mouse - DONE
-moving elements with mouse - DONE
-selecting to perform actions(with or without-keyboard(command drivens)) - DONE
-zooming in and out - DONE
-moving the canvas - DONE
+| Key | Action |
+| --- | --- |
+| `j` | Next numbered element |
+| `k` | Previous numbered element |
+| `[number]` | Jump to specific element |
 
-Other:
-One config file to config everything(the defaults). - DONE
-This config file should also let user change default keybindings - DONE
-and all other defaults.
+### Commands (prefix `:`)
 
-Each element when inserted will show a number tag by default. So that it's easier to navigate between the elements. - DONE
-But while exporting these numbered tags will not longer be visible in the exported image. 
-Vim-like Status bar - DONE
+| Command | Action |
+| --- | --- |
+| `:w [filename] [dir]` | Save (optional filename) |
+| `:wq` | Save and quit |
+| `:q` | Quit |
+| `:open [path]` | Open Toggle file |
+| `:export [png|jpg|svg] [all|selected|frame] [name] [dir]` | Export canvas |
+| `:color <#RRGGBB|#RRGGBBAA|name>` | Set stroke color |
+| `:strokew [n]` | Set stroke width |
+| `:font [number]` | Set font size |
+| `:font-family [path]` | Set font family |
+| `:theme [dark/light]` | Change UI theme |
+| `:type [type]` | Background: `blank`, `grid`, `dotted` |
+| `:gridw [n]` | Set grid size |
+| `:resize[t/b/r/l] [px]` | Resize side (top/bottom/right/left) |
 
+### Mouse & UI
+
+* **Drag Elements:** Move selection.
+* **Drag Handles:** Resize/Rotate.
+* **Scroll:** Zoom in/out.
+* **Click + Drag Space:** Pan canvas.
+* **Numbered Tags:** Auto-assigned to elements for `[number]` navigation (hidden on export).
+* **Status Bar:** Vim-style mode/command display.
+* **Config:** Single file for all default behaviors and keybindings.
+
+---
