@@ -40,6 +40,22 @@ cmake --build build
 sudo cmake --install build --prefix /usr/local
 ```
 
+### App launcher integration (rofi, dmenu, GNOME/KDE)
+After installing, the app is discoverable by launchers via the desktop entry.
+
+If you installed system‑wide:
+```bash
+sudo cmake --install build --prefix /usr/local
+```
+
+If you want a user‑only install:
+```bash
+cmake --install build --prefix ~/.local
+update-desktop-database ~/.local/share/applications
+```
+
+Then search for `toggle` in your launcher.
+
 ## Cheatsheet
 
 ### Modes

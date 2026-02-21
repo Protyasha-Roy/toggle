@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=toggle
+Comment=Fast, keyboard-driven drawing app
+Exec=toggle
+Terminal=false
+Categories=Graphics;2DGraphics;Utility;
