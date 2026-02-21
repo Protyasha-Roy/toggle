@@ -72,8 +72,8 @@ Built with C++ and Raylib.
 | `:wq` | Save and quit |
 | `:q` | Quit |
 | `:open [path]` | Open Toggle file |
-| `:export [png|jpg|svg] [all|selected|frame] [name] [dir]` | Export canvas |
-| `:color <#RRGGBB|#RRGGBBAA|name>` | Set stroke color |
+| `:export [png/svg/jpeg] 'filename'` | Export canvas |
+| `:color [#RRGGBB|#RRGGBBAA|name]` | Set stroke color |
 | `:strokew [n]` | Set stroke width |
 | `:font [number]` | Set font size |
 | `:font-family [path]` | Set font family |
