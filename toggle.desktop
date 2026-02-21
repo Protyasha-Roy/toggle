@@ -5,6 +5,6 @@ Name=toggle
 Comment=graphics drawing tool
 Exec=/home/username/mnene/programming/creation/toggle/toggle
 Path=/home/username/mnene/programming/creation/toggle/
-Terminal=true
+Terminal=false
 Categories=Utility;Development;
 
