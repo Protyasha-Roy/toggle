@@ -19,6 +19,7 @@ using namespace std;
 enum Mode {
   SELECTION_MODE,
   MOVE_MODE,
+  RESIZE_ROTATE_MODE,
   LINE_MODE,
   DOTTEDLINE_MODE,
   ARROWLINE_MODE,
@@ -110,6 +111,7 @@ struct Element {
   Vector2 end;
   float strokeWidth;
   Color color;
+  float rotation = 0.0f;
   vector<Vector2> path;
   int originalIndex = -1;
   int uniqueID = -1;
@@ -117,7 +119,7 @@ struct Element {
   string text;
   float textSize = 24.0f;
 
-  Rectangle GetBounds() const {
+  Rectangle GetLocalBounds() const {
     float minX, minY, maxX, maxY;
     if (type == GROUP_MODE && !children.empty()) {
       Rectangle b = children[0].GetBounds();
@@ -158,6 +160,36 @@ struct Element {
       maxX = max(start.x, end.x);
       maxY = max(start.y, end.y);
     }
+    return {minX, minY, maxX - minX, maxY - minY};
+  }
+
+  Rectangle GetBounds() const {
+    Rectangle local = GetLocalBounds();
+    if (rotation == 0.0f || type == CIRCLE_MODE || type == DOTTEDCIRCLE_MODE ||
+        type == GROUP_MODE) {
+      return local;
+    }
+
+    Vector2 center = {local.x + local.width * 0.5f,
+                      local.y + local.height * 0.5f};
+    float rad = rotation;
+    auto rot = [&](Vector2 p) {
+      float s = sinf(rad);
+      float c = cosf(rad);
+      Vector2 v = {p.x - center.x, p.y - center.y};
+      return Vector2{center.x + v.x * c - v.y * s,
+                     center.y + v.x * s + v.y * c};
+    };
+
+    Vector2 c1 = rot({local.x, local.y});
+    Vector2 c2 = rot({local.x + local.width, local.y});
+    Vector2 c3 = rot({local.x + local.width, local.y + local.height});
+    Vector2 c4 = rot({local.x, local.y + local.height});
+
+    float minX = min(min(c1.x, c2.x), min(c3.x, c4.x));
+    float minY = min(min(c1.y, c2.y), min(c3.y, c4.y));
+    float maxX = max(max(c1.x, c2.x), max(c3.x, c4.x));
+    float maxY = max(max(c1.y, c2.y), max(c3.y, c4.y));
     return {minX, minY, maxX - minX, maxY - minY};
   }
 };
@@ -219,6 +251,13 @@ struct Canvas {
   string savePath;
   string fontFamilyPath = "IosevkaNerdFontMono-Regular.ttf";
   bool ownsFont = true;
+  bool transformActive = false;
+  int transformHandle = 0;
+  int transformIndex = -1;
+  Element transformStart;
+  Vector2 transformCenter = {0.0f, 0.0f};
+  Vector2 transformStartMouse = {0.0f, 0.0f};
+  float transformStartAngle = 0.0f;
 };
 
 void RestoreZOrder(Canvas &canvas);
@@ -277,19 +316,41 @@ void NormalizeCanvasIDs(Canvas &canvas) {
   canvas.nextElementId = nextId;
 }
 
+Vector2 RotatePoint(Vector2 p, Vector2 center, float radians) {
+  float s = sinf(radians);
+  float c = cosf(radians);
+  Vector2 v = {p.x - center.x, p.y - center.y};
+  return {center.x + v.x * c - v.y * s, center.y + v.x * s + v.y * c};
+}
+
+Vector2 ElementCenterLocal(const Element &el) {
+  if (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE ||
+      el.type == ARROWLINE_MODE) {
+    return {(el.start.x + el.end.x) * 0.5f, (el.start.y + el.end.y) * 0.5f};
+  }
+  Rectangle b = el.GetLocalBounds();
+  return {b.x + b.width * 0.5f, b.y + b.height * 0.5f};
+}
+
 bool IsPointOnElement(const Element &el, Vector2 p, float tolerance) {
+  Vector2 localP = p;
+  if (el.rotation != 0.0f && el.type != CIRCLE_MODE &&
+      el.type != DOTTEDCIRCLE_MODE) {
+    Vector2 center = ElementCenterLocal(el);
+    localP = RotatePoint(p, center, -el.rotation);
+  }
   float tol = max(0.5f, tolerance);
   if (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE ||
       el.type == ARROWLINE_MODE) {
     if (Vector2Distance(el.start, el.end) < 0.001f) {
-      return Vector2Distance(p, el.start) <= (el.strokeWidth * 0.5f + tol);
+      return Vector2Distance(localP, el.start) <= (el.strokeWidth * 0.5f + tol);
     }
-    return CheckCollisionPointLine(p, el.start, el.end,
+    return CheckCollisionPointLine(localP, el.start, el.end,
                                    el.strokeWidth * 0.5f + tol);
   }
   if (el.type == CIRCLE_MODE || el.type == DOTTEDCIRCLE_MODE) {
     float r = Vector2Distance(el.start, el.end);
-    float d = Vector2Distance(p, el.start);
+    float d = Vector2Distance(localP, el.start);
     return d <= (r + el.strokeWidth * 0.5f + tol);
   }
   if (el.type == RECTANGLE_MODE || el.type == DOTTEDRECT_MODE) {
@@ -299,26 +360,27 @@ bool IsPointOnElement(const Element &el, Vector2 p, float tolerance) {
     float y1 = max(el.start.y, el.end.y);
     Rectangle filled = {x0 - tol, y0 - tol, (x1 - x0) + 2 * tol,
                         (y1 - y0) + 2 * tol};
-    if (CheckCollisionPointRec(p, filled))
+    if (CheckCollisionPointRec(localP, filled))
       return true;
     Vector2 a = {x0, y0};
     Vector2 b = {x1, y0};
     Vector2 c = {x1, y1};
     Vector2 d = {x0, y1};
     float t = el.strokeWidth * 0.5f + tol;
-    return CheckCollisionPointLine(p, a, b, t) ||
-           CheckCollisionPointLine(p, b, c, t) ||
-           CheckCollisionPointLine(p, c, d, t) ||
-           CheckCollisionPointLine(p, d, a, t);
+    return CheckCollisionPointLine(localP, a, b, t) ||
+           CheckCollisionPointLine(localP, b, c, t) ||
+           CheckCollisionPointLine(localP, c, d, t) ||
+           CheckCollisionPointLine(localP, d, a, t);
   }
   if (el.type == PEN_MODE) {
     if (el.path.empty())
       return false;
     if (el.path.size() == 1)
-      return Vector2Distance(p, el.path[0]) <= (el.strokeWidth * 0.5f + tol);
+      return Vector2Distance(localP, el.path[0]) <=
+             (el.strokeWidth * 0.5f + tol);
     float t = el.strokeWidth * 0.5f + tol;
     for (size_t i = 1; i < el.path.size(); i++) {
-      if (CheckCollisionPointLine(p, el.path[i - 1], el.path[i], t))
+      if (CheckCollisionPointLine(localP, el.path[i - 1], el.path[i], t))
         return true;
     }
     return false;
@@ -331,7 +393,7 @@ bool IsPointOnElement(const Element &el, Vector2 p, float tolerance) {
     return false;
   }
   if (el.type == TEXT_MODE) {
-    return CheckCollisionPointRec(p, el.GetBounds());
+    return CheckCollisionPointRec(localP, el.GetLocalBounds());
   }
   return false;
 }
@@ -456,12 +518,21 @@ void DrawDashedRing(Vector2 center, float radius, float width, Color color) {
 }
 
 void DrawElement(const Element &el, const Font &font, float textSize) {
+  Vector2 s = el.start;
+  Vector2 e = el.end;
+  if (el.rotation != 0.0f &&
+      (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE ||
+       el.type == ARROWLINE_MODE)) {
+    Vector2 center = ElementCenterLocal(el);
+    s = RotatePoint(el.start, center, el.rotation);
+    e = RotatePoint(el.end, center, el.rotation);
+  }
   if (el.type == LINE_MODE)
-    DrawLineEx(el.start, el.end, el.strokeWidth, el.color);
+    DrawLineEx(s, e, el.strokeWidth, el.color);
   else if (el.type == DOTTEDLINE_MODE)
-    DrawDashedLine(el.start, el.end, el.strokeWidth, el.color);
+    DrawDashedLine(s, e, el.strokeWidth, el.color);
   else if (el.type == ARROWLINE_MODE)
-    DrawArrowLine(el.start, el.end, el.strokeWidth, el.color);
+    DrawArrowLine(s, e, el.strokeWidth, el.color);
   else if (el.type == CIRCLE_MODE)
     DrawRing(el.start, Vector2Distance(el.start, el.end) - el.strokeWidth / 2,
              Vector2Distance(el.start, el.end) + el.strokeWidth / 2, 0, 360, 60,
@@ -469,45 +540,113 @@ void DrawElement(const Element &el, const Font &font, float textSize) {
   else if (el.type == DOTTEDCIRCLE_MODE)
     DrawDashedRing(el.start, Vector2Distance(el.start, el.end), el.strokeWidth,
                    el.color);
-  else if (el.type == RECTANGLE_MODE)
-    DrawRectangleLinesEx({min(el.start.x, el.end.x), min(el.start.y, el.end.y),
-                          abs(el.end.x - el.start.x),
-                          abs(el.end.y - el.start.y)},
-                         el.strokeWidth, el.color);
+  else if (el.type == RECTANGLE_MODE) {
+    Rectangle r = {min(el.start.x, el.end.x), min(el.start.y, el.end.y),
+                   abs(el.end.x - el.start.x), abs(el.end.y - el.start.y)};
+    if (el.rotation == 0.0f) {
+      DrawRectangleLinesEx(r, el.strokeWidth, el.color);
+    } else {
+      Vector2 center = ElementCenterLocal(el);
+      Vector2 origin = {r.width * 0.5f, r.height * 0.5f};
+      Rectangle rect = {center.x, center.y, r.width, r.height};
+      DrawRectanglePro(rect, origin, el.rotation * RAD2DEG, Fade(el.color, 0.0f));
+      float rad = el.rotation;
+      Vector2 hx = {cosf(rad) * (r.width * 0.5f),
+                    sinf(rad) * (r.width * 0.5f)};
+      Vector2 hy = {-sinf(rad) * (r.height * 0.5f),
+                    cosf(rad) * (r.height * 0.5f)};
+      Vector2 c1 = Vector2Subtract(Vector2Subtract(center, hx), hy);
+      Vector2 c2 = Vector2Add(Vector2Subtract(center, hx), hy);
+      Vector2 c3 = Vector2Add(Vector2Add(center, hx), hy);
+      Vector2 c4 = Vector2Subtract(Vector2Add(center, hx), hy);
+      DrawLineEx(c1, c2, el.strokeWidth, el.color);
+      DrawLineEx(c2, c3, el.strokeWidth, el.color);
+      DrawLineEx(c3, c4, el.strokeWidth, el.color);
+      DrawLineEx(c4, c1, el.strokeWidth, el.color);
+    }
+  }
   else if (el.type == DOTTEDRECT_MODE) {
     Rectangle r = {min(el.start.x, el.end.x), min(el.start.y, el.end.y),
                    abs(el.end.x - el.start.x), abs(el.end.y - el.start.y)};
     float overlap = el.strokeWidth * 0.5f;
-    DrawDashedLine({r.x - overlap, r.y}, {r.x + r.width + overlap, r.y},
-                   el.strokeWidth, el.color);
-    DrawDashedLine({r.x + r.width, r.y - overlap},
-                   {r.x + r.width, r.y + r.height + overlap}, el.strokeWidth,
-                   el.color);
-    DrawDashedLine({r.x + r.width + overlap, r.y + r.height},
-                   {r.x - overlap, r.y + r.height}, el.strokeWidth, el.color);
-    DrawDashedLine({r.x, r.y + r.height + overlap}, {r.x, r.y - overlap},
-                   el.strokeWidth, el.color);
+    if (el.rotation == 0.0f) {
+      DrawDashedLine({r.x - overlap, r.y}, {r.x + r.width + overlap, r.y},
+                     el.strokeWidth, el.color);
+      DrawDashedLine({r.x + r.width, r.y - overlap},
+                     {r.x + r.width, r.y + r.height + overlap}, el.strokeWidth,
+                     el.color);
+      DrawDashedLine({r.x + r.width + overlap, r.y + r.height},
+                     {r.x - overlap, r.y + r.height}, el.strokeWidth, el.color);
+      DrawDashedLine({r.x, r.y + r.height + overlap}, {r.x, r.y - overlap},
+                     el.strokeWidth, el.color);
+    } else {
+      Vector2 center = ElementCenterLocal(el);
+      float rad = el.rotation;
+      Vector2 hx = {cosf(rad) * (r.width * 0.5f),
+                    sinf(rad) * (r.width * 0.5f)};
+      Vector2 hy = {-sinf(rad) * (r.height * 0.5f),
+                    cosf(rad) * (r.height * 0.5f)};
+      Vector2 c1 = Vector2Subtract(Vector2Subtract(center, hx), hy);
+      Vector2 c2 = Vector2Add(Vector2Subtract(center, hx), hy);
+      Vector2 c3 = Vector2Add(Vector2Add(center, hx), hy);
+      Vector2 c4 = Vector2Subtract(Vector2Add(center, hx), hy);
+      DrawDashedLine(c1, c2, el.strokeWidth, el.color);
+      DrawDashedLine(c2, c3, el.strokeWidth, el.color);
+      DrawDashedLine(c3, c4, el.strokeWidth, el.color);
+      DrawDashedLine(c4, c1, el.strokeWidth, el.color);
+    }
   } else if (el.type == PEN_MODE) {
     int pointCount = (int)el.path.size();
 
     if (pointCount == 1) {
-      DrawCircleV(el.path[0], el.strokeWidth / 2, el.color);
+      Vector2 p = el.path[0];
+      if (el.rotation != 0.0f) {
+        Vector2 center = ElementCenterLocal(el);
+        p = RotatePoint(p, center, el.rotation);
+      }
+      DrawCircleV(p, el.strokeWidth / 2, el.color);
     }
     // Catmull-Rom requires at least 4 points to calculate the curve
     else if (pointCount >= 4) {
-      DrawSplineCatmullRom(el.path.data(), pointCount, el.strokeWidth,
-                           el.color);
+      if (el.rotation == 0.0f) {
+        DrawSplineCatmullRom(el.path.data(), pointCount, el.strokeWidth,
+                             el.color);
+      } else {
+        Vector2 center = ElementCenterLocal(el);
+        vector<Vector2> rotated;
+        rotated.reserve(el.path.size());
+        for (const auto &p : el.path)
+          rotated.push_back(RotatePoint(p, center, el.rotation));
+        DrawSplineCatmullRom(rotated.data(), (int)rotated.size(),
+                             el.strokeWidth, el.color);
+      }
     }
     // Fallback for 2 or 3 points: Draw straight lines
     else if (pointCount > 1) {
-      DrawLineStrip(el.path.data(), pointCount, el.color);
+      if (el.rotation == 0.0f) {
+        DrawLineStrip(el.path.data(), pointCount, el.color);
+      } else {
+        Vector2 center = ElementCenterLocal(el);
+        vector<Vector2> rotated;
+        rotated.reserve(el.path.size());
+        for (const auto &p : el.path)
+          rotated.push_back(RotatePoint(p, center, el.rotation));
+        DrawLineStrip(rotated.data(), (int)rotated.size(), el.color);
+      }
     }
   } else if (el.type == GROUP_MODE) {
     for (const auto &child : el.children)
       DrawElement(child, font, textSize);
   } else if (el.type == TEXT_MODE) {
     float size = (el.textSize > 0.0f) ? el.textSize : textSize;
-    DrawTextEx(font, el.text.c_str(), el.start, size, 2, el.color);
+    if (el.rotation == 0.0f) {
+      DrawTextEx(font, el.text.c_str(), el.start, size, 2, el.color);
+    } else {
+      Vector2 center = ElementCenterLocal(el);
+      Vector2 origin = {center.x - el.start.x, center.y - el.start.y};
+      DrawTextPro(font, el.text.c_str(), center, origin, el.rotation * RAD2DEG,
+                  size, 2, el.color);
+    }
   }
 }
 
@@ -557,6 +696,37 @@ void MoveElement(Element &el, Vector2 delta) {
     p = Vector2Add(p, delta);
   for (auto &child : el.children)
     MoveElement(child, delta);
+}
+
+void RotateElementGeometry(Element &el, Vector2 center, float radians) {
+  el.start = RotatePoint(el.start, center, radians);
+  el.end = RotatePoint(el.end, center, radians);
+  for (auto &p : el.path)
+    p = RotatePoint(p, center, radians);
+  for (auto &child : el.children)
+    RotateElementGeometry(child, center, radians);
+  if (el.type != CIRCLE_MODE && el.type != DOTTEDCIRCLE_MODE)
+    el.rotation += radians;
+}
+
+void ScaleElementGeometry(Element &el, Vector2 center, float sx, float sy,
+                          const Font &font, float fallbackTextSize) {
+  auto scalePoint = [&](Vector2 p) {
+    return Vector2{center.x + (p.x - center.x) * sx,
+                   center.y + (p.y - center.y) * sy};
+  };
+  el.start = scalePoint(el.start);
+  el.end = scalePoint(el.end);
+  for (auto &p : el.path)
+    p = scalePoint(p);
+  for (auto &child : el.children)
+    ScaleElementGeometry(child, center, sx, sy, font, fallbackTextSize);
+  if (el.type == TEXT_MODE) {
+    float size = (el.textSize > 0.0f) ? el.textSize : fallbackTextSize;
+    float scale = max(fabsf(sx), fabsf(sy));
+    el.textSize = max(1.0f, size * scale);
+    UpdateTextBounds(el, font, fallbackTextSize);
+  }
 }
 
 void RestoreZOrder(Canvas &canvas) {
@@ -1031,7 +1201,8 @@ void SetDefaultKeymap(AppConfig &cfg) {
   AddDefaultBinding(cfg, "mode_move", "M");
   AddDefaultBinding(cfg, "mode_line_base", "L");
   AddDefaultBinding(cfg, "mode_circle_base", "C");
-  AddDefaultBinding(cfg, "mode_rect_base", "R");
+  AddDefaultBinding(cfg, "mode_rect_base", "Ctrl+R");
+  AddDefaultBinding(cfg, "mode_resize_rotate", "R|Shift+R");
   AddDefaultBinding(cfg, "prefix_dotted", "D");
   AddDefaultBinding(cfg, "prefix_arrow", "A");
   AddDefaultBinding(cfg, "mode_eraser", "E");
@@ -1387,6 +1558,9 @@ void SetMode(Canvas &canvas, const AppConfig &cfg, Mode mode) {
   } else if (mode == MOVE_MODE) {
     canvas.modeText = "MOVE";
     canvas.modeColor = cfg.modeMove;
+  } else if (mode == RESIZE_ROTATE_MODE) {
+    canvas.modeText = "RESIZE/ROTATE";
+    canvas.modeColor = cfg.modeSelection;
   } else if (mode == LINE_MODE) {
     canvas.modeText = "LINE";
     canvas.modeColor = cfg.modeLine;
@@ -1425,7 +1599,7 @@ void SerializeElement(ofstream &out, const Element &el) {
       << el.strokeWidth << " " << (int)el.color.r << " " << (int)el.color.g
       << " " << (int)el.color.b << " " << (int)el.color.a << " " << el.start.x
       << " " << el.start.y << " " << el.end.x << " " << el.end.y << " "
-      << el.textSize << "\n";
+      << el.rotation << " " << el.textSize << "\n";
   out << "TEXT " << el.text.size() << "\n" << el.text << "\n";
   out << "PATH " << el.path.size() << "\n";
   for (const auto &p : el.path)
@@ -1464,12 +1638,20 @@ bool DeserializeElement(istream &in, Element &el) {
   int type = 0;
   int r = 0, g = 0, b = 0, a = 255;
   el.textSize = 24.0f;
+  el.rotation = 0.0f;
   if (!(ls >> type >> el.uniqueID >> el.strokeWidth >> r >> g >> b >> a >>
         el.start.x >> el.start.y >> el.end.x >> el.end.y))
     return false;
-  // Backward compatibility for files saved before textSize was serialized.
-  if (!(ls >> el.textSize))
-    el.textSize = 24.0f;
+  vector<float> tail;
+  float v = 0.0f;
+  while (ls >> v)
+    tail.push_back(v);
+  if (tail.size() == 1) {
+    el.textSize = tail[0];
+  } else if (tail.size() >= 2) {
+    el.rotation = tail[0];
+    el.textSize = tail[1];
+  }
   el.type = (Mode)type;
   el.color = {(unsigned char)r, (unsigned char)g, (unsigned char)b,
               (unsigned char)a};
@@ -1597,8 +1779,17 @@ string SvgEscape(const string &text) {
 void WriteSvgElement(ofstream &out, const Element &el, const string &fontFamily,
                      float textSize, const Camera2D &camera) {
   string stroke = TextFormat("rgb(%d,%d,%d)", el.color.r, el.color.g, el.color.b);
-  Vector2 s = GetWorldToScreen2D(el.start, camera);
-  Vector2 e = GetWorldToScreen2D(el.end, camera);
+  Vector2 s = el.start;
+  Vector2 e = el.end;
+  if (el.rotation != 0.0f &&
+      (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE ||
+       el.type == ARROWLINE_MODE)) {
+    Vector2 center = ElementCenterLocal(el);
+    s = RotatePoint(s, center, el.rotation);
+    e = RotatePoint(e, center, el.rotation);
+  }
+  s = GetWorldToScreen2D(s, camera);
+  e = GetWorldToScreen2D(e, camera);
   float scaledStroke = max(0.5f, el.strokeWidth * camera.zoom);
   float effectiveTextSize = (el.textSize > 0.0f) ? el.textSize : textSize;
   float scaledTextSize = max(6.0f, effectiveTextSize * camera.zoom);
@@ -1636,6 +1827,12 @@ void WriteSvgElement(ofstream &out, const Element &el, const string &fontFamily,
     out << "<rect x=\"" << x << "\" y=\"" << y << "\" width=\"" << w
         << "\" height=\"" << h << "\" stroke=\"" << stroke
         << "\" stroke-width=\"" << scaledStroke << "\" fill=\"none\"";
+    if (el.rotation != 0.0f) {
+      Vector2 center = ElementCenterLocal(el);
+      Vector2 cs = GetWorldToScreen2D(center, camera);
+      out << " transform=\"rotate(" << (el.rotation * RAD2DEG) << " " << cs.x
+          << " " << cs.y << ")\"";
+    }
     if (el.type == DOTTEDRECT_MODE)
       out << " stroke-dasharray=\"8,6\"";
     out << " />\n";
@@ -1650,14 +1847,23 @@ void WriteSvgElement(ofstream &out, const Element &el, const string &fontFamily,
   } else if (el.type == PEN_MODE) {
     if (el.path.size() >= 2) {
       out << "<polyline points=\"";
+      Vector2 center = ElementCenterLocal(el);
       for (const auto &p : el.path) {
-        Vector2 sp = GetWorldToScreen2D(p, camera);
+        Vector2 wp = p;
+        if (el.rotation != 0.0f)
+          wp = RotatePoint(wp, center, el.rotation);
+        Vector2 sp = GetWorldToScreen2D(wp, camera);
         out << sp.x << "," << sp.y << " ";
       }
       out << "\" stroke=\"" << stroke << "\" stroke-width=\"" << scaledStroke
           << "\" fill=\"none\" stroke-linecap=\"round\" stroke-linejoin=\"round\" />\n";
     } else if (el.path.size() == 1) {
-      Vector2 sp = GetWorldToScreen2D(el.path[0], camera);
+      Vector2 wp = el.path[0];
+      if (el.rotation != 0.0f) {
+        Vector2 center = ElementCenterLocal(el);
+        wp = RotatePoint(wp, center, el.rotation);
+      }
+      Vector2 sp = GetWorldToScreen2D(wp, camera);
       out << "<circle cx=\"" << sp.x << "\" cy=\"" << sp.y
           << "\" r=\"" << max(0.5f, el.strokeWidth * 0.5f * camera.zoom)
           << "\" fill=\""
@@ -1666,8 +1872,14 @@ void WriteSvgElement(ofstream &out, const Element &el, const string &fontFamily,
   } else if (el.type == TEXT_MODE) {
     out << "<text x=\"" << s.x << "\" y=\"" << (s.y + scaledTextSize)
         << "\" fill=\"" << stroke << "\" font-family=\"" << SvgEscape(fontFamily)
-        << "\" font-size=\"" << scaledTextSize << "\">" << SvgEscape(el.text)
-        << "</text>\n";
+        << "\" font-size=\"" << scaledTextSize << "\"";
+    if (el.rotation != 0.0f) {
+      Vector2 center = ElementCenterLocal(el);
+      Vector2 cs = GetWorldToScreen2D(center, camera);
+      out << " transform=\"rotate(" << (el.rotation * RAD2DEG) << " " << cs.x
+          << " " << cs.y << ")\"";
+    }
+    out << ">" << SvgEscape(el.text) << "</text>\n";
   } else if (el.type == GROUP_MODE) {
     for (const auto &child : el.children)
       WriteSvgElement(out, child, fontFamily, textSize, camera);
@@ -2372,6 +2584,10 @@ int main() {
       SetMode(canvas, cfg, MOVE_MODE);
     }
     if (!canvas.isTextEditing &&
+        IsActionPressed(cfg, "mode_resize_rotate", shiftDown, ctrlDown, altDown)) {
+      SetMode(canvas, cfg, RESIZE_ROTATE_MODE);
+    }
+    if (!canvas.isTextEditing &&
         IsActionPressed(cfg, "mode_line_base", shiftDown, ctrlDown, altDown)) {
       int dottedPrefixKey = PrimaryKeyForAction(cfg, "prefix_dotted");
       int arrowPrefixKey = PrimaryKeyForAction(cfg, "prefix_arrow");
@@ -2735,6 +2951,187 @@ int main() {
         canvas.isBoxSelecting = false;
         canvas.boxSelectActive = false;
       }
+    } else if (canvas.mode == RESIZE_ROTATE_MODE) {
+      float hitTol = cfg.defaultHitTolerance / canvas.camera.zoom;
+      float handleRadius = 7.0f / canvas.camera.zoom;
+      float rotateOffset = 26.0f / canvas.camera.zoom;
+
+      auto pickTopElement = [&]() -> int {
+        for (int i = (int)canvas.elements.size() - 1; i >= 0; --i) {
+          if (IsPointOnElement(canvas.elements[i], mouseWorld, hitTol))
+            return i;
+        }
+        return -1;
+      };
+
+      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
+        canvas.transformActive = false;
+        canvas.transformHandle = 0;
+        canvas.transformIndex = -1;
+
+        int activeIdx = -1;
+        if (!canvas.selectedIndices.empty())
+          activeIdx = canvas.selectedIndices.back();
+
+        if (activeIdx >= 0 && activeIdx < (int)canvas.elements.size()) {
+          Element &el = canvas.elements[activeIdx];
+          Vector2 center = ElementCenterLocal(el);
+
+          bool handleHit = false;
+          int handle = 0;
+
+          if (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE ||
+              el.type == ARROWLINE_MODE) {
+            Vector2 s = el.start;
+            Vector2 e = el.end;
+            if (el.rotation != 0.0f) {
+              s = RotatePoint(s, center, el.rotation);
+              e = RotatePoint(e, center, el.rotation);
+            }
+            if (Vector2Distance(mouseWorld, s) <= handleRadius) {
+              handleHit = true;
+              handle = 7;
+            } else if (Vector2Distance(mouseWorld, e) <= handleRadius) {
+              handleHit = true;
+              handle = 8;
+            } else {
+              Vector2 mid = {(s.x + e.x) * 0.5f, (s.y + e.y) * 0.5f};
+              Vector2 dir = Vector2Subtract(e, s);
+              if (Vector2Length(dir) > 0.001f) {
+                dir = Vector2Normalize(dir);
+                Vector2 normal = {-dir.y, dir.x};
+                Vector2 rotHandle =
+                    Vector2Add(mid, Vector2Scale(normal, rotateOffset));
+                if (Vector2Distance(mouseWorld, rotHandle) <= handleRadius) {
+                  handleHit = true;
+                  handle = 2;
+                }
+              }
+            }
+          } else {
+            Rectangle b = el.GetLocalBounds();
+            Vector2 tl = {b.x, b.y};
+            Vector2 tr = {b.x + b.width, b.y};
+            Vector2 br = {b.x + b.width, b.y + b.height};
+            Vector2 bl = {b.x, b.y + b.height};
+            Vector2 rtc = {b.x + b.width * 0.5f, b.y - rotateOffset};
+
+            if (el.rotation != 0.0f) {
+              tl = RotatePoint(tl, center, el.rotation);
+              tr = RotatePoint(tr, center, el.rotation);
+              br = RotatePoint(br, center, el.rotation);
+              bl = RotatePoint(bl, center, el.rotation);
+              rtc = RotatePoint(rtc, center, el.rotation);
+            }
+
+            if (Vector2Distance(mouseWorld, rtc) <= handleRadius) {
+              handleHit = true;
+              handle = 2;
+            } else if (Vector2Distance(mouseWorld, tl) <= handleRadius) {
+              handleHit = true;
+              handle = 3;
+            } else if (Vector2Distance(mouseWorld, tr) <= handleRadius) {
+              handleHit = true;
+              handle = 4;
+            } else if (Vector2Distance(mouseWorld, br) <= handleRadius) {
+              handleHit = true;
+              handle = 5;
+            } else if (Vector2Distance(mouseWorld, bl) <= handleRadius) {
+              handleHit = true;
+              handle = 6;
+            }
+          }
+
+          if (handleHit) {
+            SaveBackup(canvas);
+            canvas.transformActive = true;
+            canvas.transformHandle = handle;
+            canvas.transformIndex = activeIdx;
+            canvas.transformStart = el;
+            canvas.transformCenter = center;
+            canvas.transformStartMouse = mouseWorld;
+            canvas.transformStartAngle =
+                atan2f(mouseWorld.y - center.y, mouseWorld.x - center.x);
+          }
+        }
+
+        if (!canvas.transformActive) {
+          int hitIndex = pickTopElement();
+          if (hitIndex != -1) {
+            RestoreZOrder(canvas);
+            SaveBackup(canvas);
+            Element selected = canvas.elements[hitIndex];
+            selected.originalIndex = hitIndex;
+            canvas.elements.erase(canvas.elements.begin() + hitIndex);
+            canvas.elements.push_back(selected);
+            canvas.selectedIndices = {(int)canvas.elements.size() - 1};
+            canvas.transformActive = true;
+            canvas.transformHandle = 1;
+            canvas.transformIndex = (int)canvas.elements.size() - 1;
+            canvas.transformStart = canvas.elements[canvas.transformIndex];
+            canvas.transformCenter =
+                ElementCenterLocal(canvas.transformStart);
+            canvas.transformStartMouse = mouseWorld;
+            canvas.transformStartAngle = atan2f(
+                mouseWorld.y - canvas.transformCenter.y,
+                mouseWorld.x - canvas.transformCenter.x);
+          } else {
+            RestoreZOrder(canvas);
+            canvas.selectedIndices.clear();
+          }
+        }
+      }
+
+      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && canvas.transformActive) {
+        int idx = canvas.transformIndex;
+        if (idx >= 0 && idx < (int)canvas.elements.size()) {
+          Element base = canvas.transformStart;
+          Vector2 center = canvas.transformCenter;
+          Element &el = canvas.elements[idx];
+
+          if (canvas.transformHandle == 1) {
+            Vector2 delta = Vector2Subtract(mouseWorld, canvas.transformStartMouse);
+            el = base;
+            MoveElement(el, delta);
+          } else if (canvas.transformHandle == 2) {
+            float angle =
+                atan2f(mouseWorld.y - center.y, mouseWorld.x - center.x);
+            float delta = angle - canvas.transformStartAngle;
+            el = base;
+            el.rotation = base.rotation + delta;
+          } else if (canvas.transformHandle == 7 ||
+                     canvas.transformHandle == 8) {
+            Vector2 localMouse = mouseWorld;
+            if (base.rotation != 0.0f)
+              localMouse = RotatePoint(mouseWorld, center, -base.rotation);
+            el = base;
+            if (canvas.transformHandle == 7)
+              el.start = localMouse;
+            else
+              el.end = localMouse;
+          } else if (canvas.transformHandle >= 3 &&
+                     canvas.transformHandle <= 6) {
+            Vector2 localMouse = mouseWorld;
+            if (base.rotation != 0.0f)
+              localMouse = RotatePoint(mouseWorld, center, -base.rotation);
+            Rectangle b = base.GetLocalBounds();
+            float halfW = max(1.0f, b.width * 0.5f);
+            float halfH = max(1.0f, b.height * 0.5f);
+            float sx = fabsf(localMouse.x - center.x) / halfW;
+            float sy = fabsf(localMouse.y - center.y) / halfH;
+            sx = max(0.05f, sx);
+            sy = max(0.05f, sy);
+            el = base;
+            ScaleElementGeometry(el, center, sx, sy, canvas.font, canvas.textSize);
+          }
+        }
+      }
+
+      if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
+        canvas.transformActive = false;
+        canvas.transformHandle = 0;
+        canvas.transformIndex = -1;
+      }
     } else if (canvas.mode == ERASER_MODE) {
       if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
         Vector2 m = mouseWorld;
@@ -2893,24 +3290,30 @@ int main() {
       for (int idx : canvas.selectedIndices)
         if (idx == (int)i)
           isSelected = true;
-      if (canvas.mode == SELECTION_MODE && isSelected) {
+      if ((canvas.mode == SELECTION_MODE || canvas.mode == RESIZE_ROTATE_MODE) &&
+          isSelected) {
         const Element &el = canvas.elements[i];
         Color selColor = {70, 140, 160, 255};
         if (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE ||
             el.type == ARROWLINE_MODE) {
           float pad = 6.0f;
-          float length = Vector2Distance(el.start, el.end);
+          Vector2 s = el.start;
+          Vector2 e = el.end;
+          if (el.rotation != 0.0f) {
+            Vector2 center = ElementCenterLocal(el);
+            s = RotatePoint(s, center, el.rotation);
+            e = RotatePoint(e, center, el.rotation);
+          }
+          float length = Vector2Distance(s, e);
           if (length < 0.01f) {
             Rectangle b = el.GetBounds();
             DrawRectangleLinesEx({b.x - 5, b.y - 5, b.width + 10, b.height + 10},
                                  2, selColor);
           } else {
-            float angle = atan2f(el.end.y - el.start.y, el.end.x - el.start.x) *
-                          RAD2DEG;
+            float angle = atan2f(e.y - s.y, e.x - s.x) * RAD2DEG;
             float width = length + pad * 2.0f;
             float height = el.strokeWidth + pad * 2.0f;
-            Vector2 center = {(el.start.x + el.end.x) * 0.5f,
-                              (el.start.y + el.end.y) * 0.5f};
+            Vector2 center = {(s.x + e.x) * 0.5f, (s.y + e.y) * 0.5f};
             Rectangle rect = {center.x, center.y, width, height};
             Vector2 origin = {width * 0.5f, height * 0.5f};
             DrawRectanglePro(rect, origin, angle, Fade(selColor, 0.18f));
@@ -2927,6 +3330,20 @@ int main() {
             DrawLineV(c3, c4, selColor);
             DrawLineV(c4, c1, selColor);
           }
+        } else if (el.rotation != 0.0f) {
+          Rectangle b = el.GetLocalBounds();
+          Vector2 center = ElementCenterLocal(el);
+          Vector2 tl = RotatePoint({b.x, b.y}, center, el.rotation);
+          Vector2 tr =
+              RotatePoint({b.x + b.width, b.y}, center, el.rotation);
+          Vector2 br = RotatePoint({b.x + b.width, b.y + b.height}, center,
+                                   el.rotation);
+          Vector2 bl =
+              RotatePoint({b.x, b.y + b.height}, center, el.rotation);
+          DrawLineV(tl, tr, selColor);
+          DrawLineV(tr, br, selColor);
+          DrawLineV(br, bl, selColor);
+          DrawLineV(bl, tl, selColor);
         } else {
           Rectangle b = el.GetBounds();
           DrawRectangleLinesEx({b.x - 5, b.y - 5, b.width + 10, b.height + 10},
@@ -2953,6 +3370,62 @@ int main() {
         float fy = ty + 4.0f;
         DrawTextEx(canvas.font, tag.c_str(), {fx, fy}, 12, 1, BLACK);
         DrawTextEx(canvas.font, tag.c_str(), {fx + 0.6f, fy}, 12, 1, BLACK);
+      }
+    }
+
+    if (canvas.mode == RESIZE_ROTATE_MODE && !canvas.selectedIndices.empty()) {
+      int idx = canvas.selectedIndices.back();
+      if (idx >= 0 && idx < (int)canvas.elements.size()) {
+        const Element &el = canvas.elements[idx];
+        Color handleColor = {70, 140, 160, 255};
+        float handleRadius = 6.0f / canvas.camera.zoom;
+        float rotateOffset = 26.0f / canvas.camera.zoom;
+        Vector2 center = ElementCenterLocal(el);
+
+        if (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE ||
+            el.type == ARROWLINE_MODE) {
+          Vector2 s = el.start;
+          Vector2 e = el.end;
+          if (el.rotation != 0.0f) {
+            s = RotatePoint(s, center, el.rotation);
+            e = RotatePoint(e, center, el.rotation);
+          }
+          DrawCircleV(s, handleRadius, handleColor);
+          DrawCircleV(e, handleRadius, handleColor);
+          Vector2 mid = {(s.x + e.x) * 0.5f, (s.y + e.y) * 0.5f};
+          Vector2 dir = Vector2Subtract(e, s);
+          if (Vector2Length(dir) > 0.001f) {
+            dir = Vector2Normalize(dir);
+            Vector2 normal = {-dir.y, dir.x};
+            Vector2 rotHandle = Vector2Add(mid, Vector2Scale(normal, rotateOffset));
+            DrawLineV(mid, rotHandle, handleColor);
+            DrawCircleV(rotHandle, handleRadius, handleColor);
+          }
+        } else {
+          Rectangle b = el.GetLocalBounds();
+          Vector2 tl = {b.x, b.y};
+          Vector2 tr = {b.x + b.width, b.y};
+          Vector2 br = {b.x + b.width, b.y + b.height};
+          Vector2 bl = {b.x, b.y + b.height};
+          Vector2 tc = {b.x + b.width * 0.5f, b.y};
+          Vector2 rotHandleLocal = {tc.x, tc.y - rotateOffset};
+
+          if (el.rotation != 0.0f) {
+            tl = RotatePoint(tl, center, el.rotation);
+            tr = RotatePoint(tr, center, el.rotation);
+            br = RotatePoint(br, center, el.rotation);
+            bl = RotatePoint(bl, center, el.rotation);
+            tc = RotatePoint(tc, center, el.rotation);
+            rotHandleLocal = RotatePoint(rotHandleLocal, center, el.rotation);
+          }
+
+          DrawCircleV(tl, handleRadius, handleColor);
+          DrawCircleV(tr, handleRadius, handleColor);
+          DrawCircleV(br, handleRadius, handleColor);
+          DrawCircleV(bl, handleRadius, handleColor);
+          DrawLineV(tc, rotHandleLocal, handleColor);
+          DrawCircleV(rotHandleLocal, handleRadius, handleColor);
+        }
       }
     }
 
