@@ -75,12 +75,24 @@ struct AppConfig {
   float defaultHitTolerance = 2.0f;
   float statusDurationSeconds = 2.0f;
   float pasteOffsetStep = 20.0f;
-  BackgroundType defaultBgType = BG_BLANK;
+  BackgroundType defaultBgType = BG_GRID;
   Color defaultDrawColor = BLACK;
-  Color lightBackground = WHITE;
-  Color darkBackground = {24, 26, 31, 255};
-  Color lightUiText = DARKGRAY;
-  Color darkUiText = {220, 222, 228, 255};
+  Color lightBackground = {241, 243, 245, 255};
+  Color darkBackground = {16, 20, 24, 255};
+  Color lightUiText = {70, 76, 84, 255};
+  Color darkUiText = {212, 218, 224, 255};
+  Color lightTextureA = {241, 243, 245, 255};
+  Color lightTextureB = {241, 243, 245, 255};
+  Color darkTextureA = {16, 20, 24, 255};
+  Color darkTextureB = {16, 20, 24, 255};
+  Color lightGridColor = {110, 118, 126, 48};
+  Color darkGridColor = {124, 134, 144, 38};
+  Color lightStatusBg = {226, 231, 236, 235};
+  Color darkStatusBg = {14, 17, 20, 235};
+  Color lightStatusLabel = {108, 116, 124, 255};
+  Color darkStatusLabel = {128, 136, 144, 255};
+  Color lightStatusValue = {44, 50, 56, 255};
+  Color darkStatusValue = {208, 214, 220, 255};
   Color modeSelection = MAROON;
   Color modeMove = DARKBROWN;
   Color modeLine = BLUE;
@@ -195,6 +207,12 @@ struct Canvas {
   bool darkTheme = false;
   Color backgroundColor = WHITE;
   Color uiTextColor = DARKGRAY;
+  Color textureColorA = {250, 250, 250, 255};
+  Color textureColorB = {240, 240, 240, 255};
+  Color gridColor = {90, 90, 90, 70};
+  Color statusBarBg = {24, 24, 24, 235};
+  Color statusLabelColor = {170, 170, 170, 255};
+  Color statusValueColor = {245, 245, 245, 255};
   Color drawColor = BLACK;
   BackgroundType bgType = BG_BLANK;
   float gridWidth = 24.0f;
@@ -769,6 +787,38 @@ string JoinPath(const string &dirPath, const string &fileName) {
   return p.string();
 }
 
+string DefaultSaveTargetPath(const AppConfig &cfg) {
+  return JoinPath(ResolveDefaultDir(cfg.defaultSaveDir, DefaultDownloadsDir()),
+                  "untitled.toggle");
+}
+
+string EllipsizeTail(const Font &font, const string &text, float size, float spacing,
+                    float maxWidth) {
+  if (MeasureTextEx(font, text.c_str(), size, spacing).x <= maxWidth)
+    return text;
+  string ell = "...";
+  if (MeasureTextEx(font, ell.c_str(), size, spacing).x > maxWidth)
+    return "";
+  string out = text;
+  while (!out.empty()) {
+    out.pop_back();
+    string candidate = out + ell;
+    if (MeasureTextEx(font, candidate.c_str(), size, spacing).x <= maxWidth)
+      return candidate;
+  }
+  return ell;
+}
+
+float DrawLabelValue(const Font &font, float x, float y, float size, float spacing,
+                     const string &label, const string &value, Color labelColor,
+                     Color valueColor) {
+  DrawTextEx(font, label.c_str(), {x, y}, size, spacing, labelColor);
+  float lx = MeasureTextEx(font, label.c_str(), size, spacing).x;
+  DrawTextEx(font, value.c_str(), {x + lx, y}, size, spacing, valueColor);
+  float vx = MeasureTextEx(font, value.c_str(), size, spacing).x;
+  return x + lx + vx;
+}
+
 string BackgroundTypeToString(BackgroundType t) {
   if (t == BG_GRID)
     return "grid";
@@ -1037,6 +1087,18 @@ void WriteDefaultConfig(const AppConfig &cfg) {
   out << "theme.dark.background=" << ColorToHex(cfg.darkBackground) << "\n";
   out << "theme.light.ui_text=" << ColorToHex(cfg.lightUiText) << "\n";
   out << "theme.dark.ui_text=" << ColorToHex(cfg.darkUiText) << "\n";
+  out << "theme.light.texture_a=" << ColorToHex(cfg.lightTextureA) << "\n";
+  out << "theme.light.texture_b=" << ColorToHex(cfg.lightTextureB) << "\n";
+  out << "theme.dark.texture_a=" << ColorToHex(cfg.darkTextureA) << "\n";
+  out << "theme.dark.texture_b=" << ColorToHex(cfg.darkTextureB) << "\n";
+  out << "theme.light.grid=" << ColorToHex(cfg.lightGridColor) << "\n";
+  out << "theme.dark.grid=" << ColorToHex(cfg.darkGridColor) << "\n";
+  out << "status.light.bg=" << ColorToHex(cfg.lightStatusBg) << "\n";
+  out << "status.dark.bg=" << ColorToHex(cfg.darkStatusBg) << "\n";
+  out << "status.light.label=" << ColorToHex(cfg.lightStatusLabel) << "\n";
+  out << "status.dark.label=" << ColorToHex(cfg.darkStatusLabel) << "\n";
+  out << "status.light.value=" << ColorToHex(cfg.lightStatusValue) << "\n";
+  out << "status.dark.value=" << ColorToHex(cfg.darkStatusValue) << "\n";
   out << "mode_color.selection=" << ColorToHex(cfg.modeSelection) << "\n";
   out << "mode_color.move=" << ColorToHex(cfg.modeMove) << "\n";
   out << "mode_color.line=" << ColorToHex(cfg.modeLine) << "\n";
@@ -1164,6 +1226,30 @@ void LoadConfig(AppConfig &cfg) {
       cfg.lightUiText = cv;
     else if (key == "theme.dark.ui_text" && ParseHexColor(value, cv))
       cfg.darkUiText = cv;
+    else if (key == "theme.light.texture_a" && ParseHexColor(value, cv))
+      cfg.lightTextureA = cv;
+    else if (key == "theme.light.texture_b" && ParseHexColor(value, cv))
+      cfg.lightTextureB = cv;
+    else if (key == "theme.dark.texture_a" && ParseHexColor(value, cv))
+      cfg.darkTextureA = cv;
+    else if (key == "theme.dark.texture_b" && ParseHexColor(value, cv))
+      cfg.darkTextureB = cv;
+    else if (key == "theme.light.grid" && ParseHexColor(value, cv))
+      cfg.lightGridColor = cv;
+    else if (key == "theme.dark.grid" && ParseHexColor(value, cv))
+      cfg.darkGridColor = cv;
+    else if (key == "status.light.bg" && ParseHexColor(value, cv))
+      cfg.lightStatusBg = cv;
+    else if (key == "status.dark.bg" && ParseHexColor(value, cv))
+      cfg.darkStatusBg = cv;
+    else if (key == "status.light.label" && ParseHexColor(value, cv))
+      cfg.lightStatusLabel = cv;
+    else if (key == "status.dark.label" && ParseHexColor(value, cv))
+      cfg.darkStatusLabel = cv;
+    else if (key == "status.light.value" && ParseHexColor(value, cv))
+      cfg.lightStatusValue = cv;
+    else if (key == "status.dark.value" && ParseHexColor(value, cv))
+      cfg.darkStatusValue = cv;
     else if (key == "mode_color.selection" && ParseHexColor(value, cv))
       cfg.modeSelection = cv;
     else if (key == "mode_color.move" && ParseHexColor(value, cv))
@@ -1234,17 +1320,25 @@ void SetTheme(Canvas &canvas, const AppConfig &cfg, bool dark) {
   if (dark) {
     canvas.backgroundColor = cfg.darkBackground;
     canvas.uiTextColor = cfg.darkUiText;
+    canvas.textureColorA = cfg.darkTextureA;
+    canvas.textureColorB = cfg.darkTextureB;
+    canvas.gridColor = cfg.darkGridColor;
+    canvas.statusBarBg = cfg.darkStatusBg;
+    canvas.statusLabelColor = cfg.darkStatusLabel;
+    canvas.statusValueColor = cfg.darkStatusValue;
   } else {
     canvas.backgroundColor = cfg.lightBackground;
     canvas.uiTextColor = cfg.lightUiText;
+    canvas.textureColorA = cfg.lightTextureA;
+    canvas.textureColorB = cfg.lightTextureB;
+    canvas.gridColor = cfg.lightGridColor;
+    canvas.statusBarBg = cfg.lightStatusBg;
+    canvas.statusLabelColor = cfg.lightStatusLabel;
+    canvas.statusValueColor = cfg.lightStatusValue;
   }
 }
 
 void DrawBackgroundPattern(const Canvas &canvas) {
-  if (canvas.bgType == BG_BLANK)
-    return;
-
-  float spacing = max(6.0f, canvas.gridWidth);
   float left = canvas.camera.target.x - canvas.camera.offset.x / canvas.camera.zoom;
   float top = canvas.camera.target.y - canvas.camera.offset.y / canvas.camera.zoom;
   float right =
@@ -1252,9 +1346,14 @@ void DrawBackgroundPattern(const Canvas &canvas) {
   float bottom =
       canvas.camera.target.y + (float)GetScreenHeight() / canvas.camera.zoom;
 
+  if (canvas.bgType == BG_BLANK)
+    return;
+
+  float spacing = max(6.0f, canvas.gridWidth);
+
   float startX = floorf(left / spacing) * spacing;
   float startY = floorf(top / spacing) * spacing;
-  Color lineColor = canvas.darkTheme ? Fade(RAYWHITE, 0.12f) : Fade(BLACK, 0.12f);
+  Color lineColor = canvas.gridColor;
 
   if (canvas.bgType == BG_GRID) {
     for (float x = startX; x <= right + spacing; x += spacing)
@@ -2088,7 +2187,7 @@ int main() {
   canvas.showTags = cfg.defaultShowTags;
   canvas.bgType = cfg.defaultBgType;
   SetTheme(canvas, cfg, cfg.defaultDarkTheme);
-  SetMode(canvas, cfg, SELECTION_MODE);
+  SetMode(canvas, cfg, PEN_MODE);
 
   while (!WindowShouldClose()) {
     bool escPressed = IsKeyPressed(KEY_ESCAPE);
@@ -2790,12 +2889,19 @@ int main() {
         }
 
         // draw tag near element start
-        DrawRectangle(canvas.elements[i].start.x,
-                      canvas.elements[i].start.y - 20, 20, 20, YELLOW);
-        DrawRectangleLines(canvas.elements[i].start.x,
-                           canvas.elements[i].start.y - 20, 20, 20, BLACK);
-        DrawText(TextFormat("%d", displayId), canvas.elements[i].start.x + 5,
-                 canvas.elements[i].start.y - 15, 10, BLACK);
+        float tx = canvas.elements[i].start.x;
+        float ty = canvas.elements[i].start.y - 22.0f;
+        DrawRectangle((int)tx, (int)ty, 24, 22, Fade(canvas.statusBarBg, 0.92f));
+        DrawRectangleLines((int)tx, (int)ty, 24, 22, canvas.statusLabelColor);
+        string tag = TextFormat("%d", displayId);
+        float fx = tx + 6.0f;
+        float fy = ty + 4.0f;
+        DrawTextEx(canvas.font, tag.c_str(), {fx + 0.6f, fy}, 12, 1,
+                   Fade(BLACK, 0.85f));
+        DrawTextEx(canvas.font, tag.c_str(), {fx, fy + 0.6f}, 12, 1,
+                   Fade(BLACK, 0.85f));
+        DrawTextEx(canvas.font, tag.c_str(), {fx, fy}, 12, 1,
+                   canvas.statusValueColor);
       }
     }
 
@@ -2828,33 +2934,68 @@ int main() {
                  canvas.editingTextSize, 2, Fade(canvas.editingColor, 0.7f));
     }
     EndMode2D();
-    Color modeDisplayColor =
-        (canvas.darkTheme && canvas.modeColor.r < 32 && canvas.modeColor.g < 32 &&
-         canvas.modeColor.b < 32)
-            ? RAYWHITE
-            : canvas.modeColor;
-    DrawTextEx(canvas.font, "Current Mode:", {10, 10}, 24, 2, canvas.uiTextColor);
-    DrawTextEx(canvas.font, canvas.modeText, {180, 10}, 24, 2,
-               modeDisplayColor);
-    DrawTextEx(canvas.font, TextFormat("Stroke: %.1f  Color: %s", canvas.strokeWidth,
-                                       ColorToHex(canvas.drawColor).c_str()),
-               {10, 42}, 18, 2, canvas.uiTextColor);
+
+    int statusH = 32;
+    int statusY = GetScreenHeight() - statusH;
+    DrawRectangle(0, statusY, GetScreenWidth(), statusH, canvas.statusBarBg);
+    DrawRectangleLines(0, statusY, GetScreenWidth(), statusH,
+                       Fade(canvas.statusLabelColor, 0.55f));
+
+    string saveDisplay =
+        canvas.savePath.empty() ? DefaultSaveTargetPath(cfg) : canvas.savePath;
+    float leftMaxW = GetScreenWidth() * 0.58f;
+
+    float leftX = 10.0f;
+    float leftY = (float)statusY + 7.0f;
+    leftX = DrawLabelValue(canvas.font, leftX, leftY, 16, 1.5f, "MODE: ",
+                           canvas.modeText, canvas.statusLabelColor,
+                           canvas.statusValueColor);
+    DrawTextEx(canvas.font, "  |  FILE: ", {leftX, leftY}, 16, 1.5f,
+               canvas.statusLabelColor);
+    leftX += MeasureTextEx(canvas.font, "  |  FILE: ", 16, 1.5f).x;
+    string filePart =
+        EllipsizeTail(canvas.font, saveDisplay, 16, 1.5f,
+                      max(10.0f, leftMaxW - (leftX - 10.0f)));
+    DrawTextEx(canvas.font, filePart.c_str(), {leftX, leftY}, 16, 1.5f,
+               canvas.statusValueColor);
+
+    string sw = TextFormat("%.1f", canvas.strokeWidth);
+    string col = ColorToHex(canvas.drawColor);
+    string zm = TextFormat("%.2fx", canvas.camera.zoom);
+    string sel = TextFormat("%d", (int)canvas.selectedIndices.size());
+    string els = TextFormat("%d", (int)canvas.elements.size());
+    vector<pair<string, string>> rightPairs = {{"SW: ", sw},
+                                               {"  COL: ", col},
+                                               {"  Z: ", zm},
+                                               {"  SEL: ", sel},
+                                               {"  ELS: ", els}};
+    float rightW = 0.0f;
+    for (const auto &kv : rightPairs) {
+      rightW += MeasureTextEx(canvas.font, kv.first.c_str(), 16, 1.5f).x;
+      rightW += MeasureTextEx(canvas.font, kv.second.c_str(), 16, 1.5f).x;
+    }
+    float rx = GetScreenWidth() - rightW - 12.0f;
+    for (const auto &kv : rightPairs) {
+      rx = DrawLabelValue(canvas.font, rx, leftY, 16, 1.5f, kv.first, kv.second,
+                          canvas.statusLabelColor, canvas.statusValueColor);
+    }
 
     if (!canvas.statusMessage.empty() && GetTime() <= canvas.statusUntil) {
-      DrawRectangle(10, 70, 520, 28, Fade(canvas.darkTheme ? BLACK : WHITE, 0.85f));
-      DrawRectangleLines(10, 70, 520, 28, Fade(canvas.uiTextColor, 0.7f));
-      DrawTextEx(canvas.font, canvas.statusMessage.c_str(), {18, 75}, 16, 1.5f,
-                 canvas.uiTextColor);
+      float mw = MeasureTextEx(canvas.font, canvas.statusMessage.c_str(), 14, 1.0f).x;
+      float mx = max(12.0f, (GetScreenWidth() - mw) * 0.5f);
+      DrawTextEx(canvas.font, canvas.statusMessage.c_str(), {mx, (float)statusY - 20},
+                 14, 1.0f, canvas.statusValueColor);
     }
 
     if (canvas.commandMode) {
-      int h = 34;
-      int y = GetScreenHeight() - h;
-      DrawRectangle(0, y, GetScreenWidth(), h, canvas.darkTheme ? BLACK : LIGHTGRAY);
-      DrawRectangleLines(0, y, GetScreenWidth(), h, Fade(canvas.uiTextColor, 0.6f));
+      int h = 32;
+      int y = statusY - h;
+      DrawRectangle(0, y, GetScreenWidth(), h, Fade(canvas.statusBarBg, 0.98f));
+      DrawRectangleLines(0, y, GetScreenWidth(), h,
+                         Fade(canvas.statusLabelColor, 0.55f));
       string line = ":" + canvas.commandBuffer + "_";
-      DrawTextEx(canvas.font, line.c_str(), {10, (float)y + 8.0f}, 20, 2,
-                 canvas.uiTextColor);
+      DrawTextEx(canvas.font, line.c_str(), {10, (float)y + 6.0f}, 18, 1.5f,
+                 canvas.statusValueColor);
     }
     EndDrawing();
   }
