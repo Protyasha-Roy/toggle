@@ -76,24 +76,24 @@ struct AppConfig {
   float defaultHitTolerance = 2.0f;
   float statusDurationSeconds = 2.0f;
   float pasteOffsetStep = 20.0f;
-  BackgroundType defaultBgType = BG_GRID;
+  BackgroundType defaultBgType = BG_BLANK;
   Color defaultDrawColor = BLACK;
-  Color lightBackground = {241, 243, 245, 255};
-  Color darkBackground = {16, 20, 24, 255};
-  Color lightUiText = {70, 76, 84, 255};
-  Color darkUiText = {212, 218, 224, 255};
-  Color lightTextureA = {241, 243, 245, 255};
-  Color lightTextureB = {241, 243, 245, 255};
-  Color darkTextureA = {16, 20, 24, 255};
-  Color darkTextureB = {16, 20, 24, 255};
-  Color lightGridColor = {110, 118, 126, 48};
-  Color darkGridColor = {124, 134, 144, 38};
-  Color lightStatusBg = {226, 231, 236, 255};
-  Color darkStatusBg = {14, 17, 20, 255};
-  Color lightStatusLabel = {108, 116, 124, 255};
-  Color darkStatusLabel = {128, 136, 144, 255};
-  Color lightStatusValue = {44, 50, 56, 255};
-  Color darkStatusValue = {208, 214, 220, 255};
+  Color lightBackground = {247, 243, 232, 255};
+  Color darkBackground = {24, 24, 24, 255};
+  Color lightUiText = {42, 42, 42, 255};
+  Color darkUiText = {228, 228, 239, 255};
+  Color lightTextureA = {247, 243, 232, 255};
+  Color lightTextureB = {241, 235, 222, 255};
+  Color darkTextureA = {31, 31, 31, 255};
+  Color darkTextureB = {27, 27, 27, 255};
+  Color lightGridColor = {216, 203, 178, 80};
+  Color darkGridColor = {52, 52, 52, 64};
+  Color lightStatusBg = {239, 230, 211, 255};
+  Color darkStatusBg = {34, 34, 34, 255};
+  Color lightStatusLabel = {107, 95, 74, 255};
+  Color darkStatusLabel = {175, 175, 175, 255};
+  Color lightStatusValue = {43, 37, 27, 255};
+  Color darkStatusValue = {240, 240, 245, 255};
   Color modeSelection = MAROON;
   Color modeMove = DARKBROWN;
   Color modeLine = BLUE;
@@ -236,6 +236,7 @@ struct Canvas {
   string statusMessage;
   double statusUntil = 0.0;
   bool shouldQuit = false;
+  bool showStatusBar = true;
   bool darkTheme = false;
   Color backgroundColor = WHITE;
   Color uiTextColor = DARKGRAY;
@@ -1479,6 +1480,26 @@ bool ParseHexColor(string hex, Color &outColor) {
   return true;
 }
 
+bool ParseNamedColor(string name, Color &outColor) {
+  name = ToLower(Trim(name));
+  static const unordered_map<string, Color> colors = {
+      {"lightgray", LIGHTGRAY}, {"gray", GRAY},       {"darkgray", DARKGRAY},
+      {"yellow", YELLOW},       {"gold", GOLD},       {"orange", ORANGE},
+      {"pink", PINK},           {"red", RED},         {"maroon", MAROON},
+      {"green", GREEN},         {"lime", LIME},       {"darkgreen", DARKGREEN},
+      {"skyblue", SKYBLUE},     {"blue", BLUE},       {"darkblue", DARKBLUE},
+      {"purple", PURPLE},       {"violet", VIOLET},   {"darkpurple", DARKPURPLE},
+      {"beige", BEIGE},         {"brown", BROWN},     {"darkbrown", DARKBROWN},
+      {"white", WHITE},         {"black", BLACK},     {"blank", BLANK},
+      {"magenta", MAGENTA},     {"raywhite", RAYWHITE},
+  };
+  auto it = colors.find(name);
+  if (it == colors.end())
+    return false;
+  outColor = it->second;
+  return true;
+}
+
 string ColorToHex(Color c) {
   return TextFormat("#%02X%02X%02X%02X", c.r, c.g, c.b, c.a);
 }
@@ -2154,8 +2175,10 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
   }
   if (opLower == "color") {
     Color c{};
-    if (args.empty() || !ParseHexColor(args[0], c)) {
-      SetStatus(canvas, cfg, "Usage: :color #RRGGBB or #RRGGBBAA");
+    if (args.empty() ||
+        (!ParseHexColor(args[0], c) && !ParseNamedColor(args[0], c))) {
+      SetStatus(canvas, cfg,
+                "Usage: :color #RRGGBB/#RRGGBBAA or color name");
       return;
     }
     vector<int> selectedIDs = GetSelectedIDs(canvas);
@@ -2424,9 +2447,10 @@ int main() {
     bool altDown = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
     Vector2 mouseScreen = GetMousePosition();
     Vector2 mouseWorld = GetScreenToWorld2D(mouseScreen, canvas.camera);
-    const int statusH = 32;
+    const int statusH = canvas.showStatusBar ? 32 : 0;
     const int statusY = GetScreenHeight() - statusH;
-    const bool mouseOnStatusBar = mouseScreen.y >= statusY;
+    const bool mouseOnStatusBar =
+        canvas.showStatusBar && mouseScreen.y >= statusY;
 
     if (!canvas.isTextEditing && !canvas.commandMode &&
         IsActionPressed(cfg, "open_command_mode", shiftDown, ctrlDown, altDown)) {
@@ -2521,6 +2545,9 @@ int main() {
     if (canvas.isTextEditing)
       key = 0;
 
+    if (!canvas.isTextEditing && IsKeyPressed(KEY_TAB)) {
+      canvas.showStatusBar = !canvas.showStatusBar;
+    }
     if (!canvas.isTextEditing &&
         IsActionPressed(cfg, "stroke_inc", shiftDown, ctrlDown, altDown)) {
       canvas.strokeWidth = min(cfg.maxStrokeWidth, canvas.strokeWidth + 1.0f);
@@ -3435,8 +3462,9 @@ int main() {
                          min(canvas.startPoint.y, canvas.currentMouse.y),
                          abs(canvas.currentMouse.x - canvas.startPoint.x),
                          abs(canvas.currentMouse.y - canvas.startPoint.y)};
-        DrawRectangleRec(box, Fade(BLUE, 0.2f));
-        DrawRectangleLinesEx(box, 1, BLUE);
+        Color grubYellow = {255, 221, 51, 255};
+        DrawRectangleRec(box, Fade(grubYellow, 0.2f));
+        DrawRectangleLinesEx(box, 1, grubYellow);
       } else if (canvas.mode != SELECTION_MODE && canvas.mode != ERASER_MODE) {
         Vector2 m = GetScreenToWorld2D(GetMousePosition(), canvas.camera);
         Element preview;
@@ -3459,9 +3487,11 @@ int main() {
     }
     EndMode2D();
 
-    DrawRectangle(0, statusY, GetScreenWidth(), statusH, canvas.statusBarBg);
-    DrawRectangleLines(0, statusY, GetScreenWidth(), statusH,
-                       canvas.statusLabelColor);
+    if (canvas.showStatusBar) {
+      DrawRectangle(0, statusY, GetScreenWidth(), statusH, canvas.statusBarBg);
+      DrawRectangleLines(0, statusY, GetScreenWidth(), statusH,
+                         canvas.statusLabelColor);
+    }
 
     string saveDisplay =
         canvas.savePath.empty() ? DefaultSaveTargetPath(cfg) : canvas.savePath;
@@ -3472,25 +3502,25 @@ int main() {
     leftX = DrawLabelValue(canvas.font, leftX, leftY, 16, 1.5f, "MODE: ",
                            canvas.modeText, canvas.statusLabelColor,
                            canvas.statusValueColor);
-    DrawTextEx(canvas.font, "  |  FILE: ", {leftX, leftY}, 16, 1.5f,
-               canvas.statusLabelColor);
-    leftX += MeasureTextEx(canvas.font, "  |  FILE: ", 16, 1.5f).x;
-    string filePart =
-        EllipsizeTail(canvas.font, saveDisplay, 16, 1.5f,
-                      max(10.0f, leftMaxW - (leftX - 10.0f)));
-    DrawTextEx(canvas.font, filePart.c_str(), {leftX, leftY}, 16, 1.5f,
-               canvas.statusValueColor);
+    if (canvas.showStatusBar) {
+      DrawTextEx(canvas.font, "  |  FILE: ", {leftX, leftY}, 16, 1.5f,
+                 canvas.statusLabelColor);
+      leftX += MeasureTextEx(canvas.font, "  |  FILE: ", 16, 1.5f).x;
+      string filePart =
+          EllipsizeTail(canvas.font, saveDisplay, 16, 1.5f,
+                        max(10.0f, leftMaxW - (leftX - 10.0f)));
+      DrawTextEx(canvas.font, filePart.c_str(), {leftX, leftY}, 16, 1.5f,
+                 canvas.statusValueColor);
+    }
 
     string sw = TextFormat("%.1f", canvas.strokeWidth);
     string col = ColorToHex(canvas.drawColor);
     string zm = TextFormat("%.2fx", canvas.camera.zoom);
-    string zperc = TextFormat("%.0f%%", canvas.camera.zoom * 100.0f);
     string sel = TextFormat("%d", (int)canvas.selectedIndices.size());
     string els = TextFormat("%d", (int)canvas.elements.size());
     vector<pair<string, string>> rightPairs = {{"SW: ", sw},
                                                {"  COL: ", col},
                                                {"  Z: ", zm},
-                                               {"  SCALE: ", zperc},
                                                {"  SEL: ", sel},
                                                {"  ELS: ", els}};
     float rightW = 0.0f;
@@ -3499,12 +3529,15 @@ int main() {
       rightW += MeasureTextEx(canvas.font, kv.second.c_str(), 16, 1.5f).x;
     }
     float rx = GetScreenWidth() - rightW - 12.0f;
-    for (const auto &kv : rightPairs) {
-      rx = DrawLabelValue(canvas.font, rx, leftY, 16, 1.5f, kv.first, kv.second,
-                          canvas.statusLabelColor, canvas.statusValueColor);
+    if (canvas.showStatusBar) {
+      for (const auto &kv : rightPairs) {
+        rx = DrawLabelValue(canvas.font, rx, leftY, 16, 1.5f, kv.first, kv.second,
+                            canvas.statusLabelColor, canvas.statusValueColor);
+      }
     }
 
-    if (!canvas.statusMessage.empty() && GetTime() <= canvas.statusUntil) {
+    if (canvas.showStatusBar && !canvas.statusMessage.empty() &&
+        GetTime() <= canvas.statusUntil) {
       float mw = MeasureTextEx(canvas.font, canvas.statusMessage.c_str(), 14, 1.0f).x;
       float mx = max(12.0f, (GetScreenWidth() - mw) * 0.5f);
       DrawTextEx(canvas.font, canvas.statusMessage.c_str(), {mx, (float)statusY - 20},
