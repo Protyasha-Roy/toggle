@@ -2894,9 +2894,44 @@ int main() {
         if (idx == (int)i)
           isSelected = true;
       if (canvas.mode == SELECTION_MODE && isSelected) {
-        Rectangle b = canvas.elements[i].GetBounds();
-        DrawRectangleLinesEx({b.x - 5, b.y - 5, b.width + 10, b.height + 10}, 2,
-                             {70, 140, 160, 255});
+        const Element &el = canvas.elements[i];
+        Color selColor = {70, 140, 160, 255};
+        if (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE ||
+            el.type == ARROWLINE_MODE) {
+          float pad = 6.0f;
+          float length = Vector2Distance(el.start, el.end);
+          if (length < 0.01f) {
+            Rectangle b = el.GetBounds();
+            DrawRectangleLinesEx({b.x - 5, b.y - 5, b.width + 10, b.height + 10},
+                                 2, selColor);
+          } else {
+            float angle = atan2f(el.end.y - el.start.y, el.end.x - el.start.x) *
+                          RAD2DEG;
+            float width = length + pad * 2.0f;
+            float height = el.strokeWidth + pad * 2.0f;
+            Vector2 center = {(el.start.x + el.end.x) * 0.5f,
+                              (el.start.y + el.end.y) * 0.5f};
+            Rectangle rect = {center.x, center.y, width, height};
+            Vector2 origin = {width * 0.5f, height * 0.5f};
+            DrawRectanglePro(rect, origin, angle, Fade(selColor, 0.18f));
+            float rad = angle * DEG2RAD;
+            Vector2 hx = {cosf(rad) * (width * 0.5f), sinf(rad) * (width * 0.5f)};
+            Vector2 hy = {-sinf(rad) * (height * 0.5f),
+                          cosf(rad) * (height * 0.5f)};
+            Vector2 c1 = Vector2Subtract(Vector2Subtract(center, hx), hy);
+            Vector2 c2 = Vector2Add(Vector2Subtract(center, hx), hy);
+            Vector2 c3 = Vector2Add(Vector2Add(center, hx), hy);
+            Vector2 c4 = Vector2Subtract(Vector2Add(center, hx), hy);
+            DrawLineV(c1, c2, selColor);
+            DrawLineV(c2, c3, selColor);
+            DrawLineV(c3, c4, selColor);
+            DrawLineV(c4, c1, selColor);
+          }
+        } else {
+          Rectangle b = el.GetBounds();
+          DrawRectangleLinesEx({b.x - 5, b.y - 5, b.width + 10, b.height + 10},
+                               2, selColor);
+        }
       }
       if (canvas.showTags) {
         // Stable displayed ID: uniqueID (always >= 0)
