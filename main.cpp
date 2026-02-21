@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <filesystem>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -32,6 +33,7 @@ enum Mode {
 };
 
 enum BackgroundType { BG_BLANK, BG_GRID, BG_DOTTED };
+enum ExportScope { EXPORT_ALL, EXPORT_SELECTED, EXPORT_FRAME };
 
 struct KeyBinding {
   int key = KEY_NULL;
@@ -44,6 +46,7 @@ struct AppConfig {
   string configPath = "config/toggle.conf";
   int windowWidth = 1000;
   int windowHeight = 800;
+  bool startMaximized = true;
   int targetFps = 60;
   int minWindowWidth = 320;
   int minWindowHeight = 240;
@@ -53,6 +56,7 @@ struct AppConfig {
   string defaultSaveDir;
   string defaultExportDir;
   string defaultOpenDir;
+  float exportRasterScale = 2.0f;
   bool defaultDarkTheme = false;
   bool defaultShowTags = false;
   float defaultStrokeWidth = 2.0f;
@@ -691,6 +695,20 @@ bool IsExportType(const string &v) {
   return t == "png" || t == "svg" || t == "jpg" || t == "jpeg";
 }
 
+bool IsExportScopeToken(const string &v) {
+  string t = ToLower(Trim(v));
+  return t == "all" || t == "selected" || t == "frame";
+}
+
+ExportScope ParseExportScope(const string &v) {
+  string t = ToLower(Trim(v));
+  if (t == "selected")
+    return EXPORT_SELECTED;
+  if (t == "frame")
+    return EXPORT_FRAME;
+  return EXPORT_ALL;
+}
+
 string NormalizeExportType(const string &v) {
   string t = ToLower(Trim(v));
   if (t == "jpeg")
@@ -704,6 +722,29 @@ string EnsureExt(string filename, const string &extNoDot) {
   if (ToLower(p.extension().string()) != ToLower(ext))
     p.replace_extension(ext);
   return p.string();
+}
+
+Rectangle ExpandRect(const Rectangle &r, float pad) {
+  return {r.x - pad, r.y - pad, r.width + pad * 2.0f, r.height + pad * 2.0f};
+}
+
+bool UnionBounds(const vector<Element> &elements, Rectangle &out) {
+  if (elements.empty())
+    return false;
+  Rectangle b = elements[0].GetBounds();
+  float minX = b.x;
+  float minY = b.y;
+  float maxX = b.x + b.width;
+  float maxY = b.y + b.height;
+  for (size_t i = 1; i < elements.size(); i++) {
+    Rectangle e = elements[i].GetBounds();
+    minX = min(minX, e.x);
+    minY = min(minY, e.y);
+    maxX = max(maxX, e.x + e.width);
+    maxY = max(maxY, e.y + e.height);
+  }
+  out = {minX, minY, max(1.0f, maxX - minX), max(1.0f, maxY - minY)};
+  return true;
 }
 
 string ResolveDefaultDir(const string &preferred, const string &fallback) {
@@ -962,6 +1003,8 @@ void WriteDefaultConfig(const AppConfig &cfg) {
   out << "window.min_width=" << cfg.minWindowWidth << "\n";
   out << "window.min_height=" << cfg.minWindowHeight << "\n";
   out << "window.title=" << cfg.windowTitle << "\n";
+  out << "window.start_maximized=" << (cfg.startMaximized ? "true" : "false")
+      << "\n";
   out << "app.target_fps=" << cfg.targetFps << "\n";
   out << "app.status_seconds=" << cfg.statusDurationSeconds << "\n";
   out << "font.default_path=" << cfg.defaultFontPath << "\n";
@@ -969,6 +1012,7 @@ void WriteDefaultConfig(const AppConfig &cfg) {
   out << "path.default_save_dir=" << cfg.defaultSaveDir << "\n";
   out << "path.default_export_dir=" << cfg.defaultExportDir << "\n";
   out << "path.default_open_dir=" << cfg.defaultOpenDir << "\n";
+  out << "export.raster_scale=" << cfg.exportRasterScale << "\n";
   out << "canvas.theme_dark=" << (cfg.defaultDarkTheme ? "true" : "false") << "\n";
   out << "canvas.show_tags=" << (cfg.defaultShowTags ? "true" : "false") << "\n";
   out << "canvas.stroke_width=" << cfg.defaultStrokeWidth << "\n";
@@ -1051,6 +1095,10 @@ void LoadConfig(AppConfig &cfg) {
       cfg.minWindowHeight = max(150, iv);
     else if (key == "window.title")
       cfg.windowTitle = value;
+    else if (key == "window.start_maximized" && ParseBool(value, bv))
+      cfg.startMaximized = bv;
+    else if (key == "window.start_fullscreen" && ParseBool(value, bv))
+      cfg.startMaximized = bv; // backward compatibility
     else if (key == "app.target_fps" && ParseIntValue(value, iv))
       cfg.targetFps = max(1, iv);
     else if (key == "app.status_seconds" && ParsePositiveFloat(value, fv))
@@ -1065,6 +1113,8 @@ void LoadConfig(AppConfig &cfg) {
       cfg.defaultExportDir = ExpandUserPath(value);
     else if (key == "path.default_open_dir")
       cfg.defaultOpenDir = ExpandUserPath(value);
+    else if (key == "export.raster_scale" && ParsePositiveFloat(value, fv))
+      cfg.exportRasterScale = max(1.0f, min(8.0f, fv));
     else if (key == "canvas.theme_dark" && ParseBool(value, bv))
       cfg.defaultDarkTheme = bv;
     else if (key == "canvas.show_tags" && ParseBool(value, bv))
@@ -1450,7 +1500,26 @@ void WriteSvgElement(ofstream &out, const Element &el, const string &fontFamily,
         << "\" stroke-width=\"" << scaledStroke << "\"";
     if (el.type == DOTTEDLINE_MODE)
       out << " stroke-dasharray=\"8,6\"";
-    out << " fill=\"none\" />\n";
+    out << " fill=\"none\" stroke-linecap=\"round\" />\n";
+    if (el.type == ARROWLINE_MODE) {
+      float angle = atan2f(e.y - s.y, e.x - s.x);
+      float lineLen = Vector2Distance(s, e);
+      float headSize = max(12.0f, scaledStroke * 3.0f);
+      if (headSize > lineLen * 0.7f)
+        headSize = lineLen * 0.7f;
+      Vector2 p1 = {e.x - headSize * cosf(angle - PI / 6),
+                    e.y - headSize * sinf(angle - PI / 6)};
+      Vector2 p2 = {e.x - headSize * cosf(angle + PI / 6),
+                    e.y - headSize * sinf(angle + PI / 6)};
+      out << "<line x1=\"" << e.x << "\" y1=\"" << e.y << "\" x2=\"" << p1.x
+          << "\" y2=\"" << p1.y << "\" stroke=\"" << stroke
+          << "\" stroke-width=\"" << scaledStroke
+          << "\" fill=\"none\" stroke-linecap=\"round\" />\n";
+      out << "<line x1=\"" << e.x << "\" y1=\"" << e.y << "\" x2=\"" << p2.x
+          << "\" y2=\"" << p2.y << "\" stroke=\"" << stroke
+          << "\" stroke-width=\"" << scaledStroke
+          << "\" fill=\"none\" stroke-linecap=\"round\" />\n";
+    }
   } else if (el.type == RECTANGLE_MODE || el.type == DOTTEDRECT_MODE) {
     float x = min(s.x, e.x);
     float y = min(s.y, e.y);
@@ -1497,28 +1566,34 @@ void WriteSvgElement(ofstream &out, const Element &el, const string &fontFamily,
   }
 }
 
-bool ExportCanvasSvg(const Canvas &canvas, const string &filename) {
+bool ExportCanvasSvg(const Canvas &canvas, const string &filename,
+                     const vector<Element> &elements, const Camera2D &camera,
+                     int outWidth, int outHeight) {
   ofstream out(filename);
   if (!out.is_open())
     return false;
-  int w = GetScreenWidth();
-  int h = GetScreenHeight();
+  int w = outWidth;
+  int h = outHeight;
+  out << fixed << setprecision(3);
   out << "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" << w
       << "\" height=\"" << h << "\" viewBox=\"0 0 " << w << " " << h << "\">\n";
-  out << "<rect width=\"100%\" height=\"100%\" fill=\"white\" />\n";
-  for (const auto &el : canvas.elements)
-    WriteSvgElement(out, el, canvas.fontFamilyPath, canvas.textSize, canvas.camera);
+  out << "<rect width=\"100%\" height=\"100%\" fill=\"rgb("
+      << (int)canvas.backgroundColor.r << "," << (int)canvas.backgroundColor.g << ","
+      << (int)canvas.backgroundColor.b << ")\" />\n";
+  for (const auto &el : elements)
+    WriteSvgElement(out, el, canvas.fontFamilyPath, canvas.textSize, camera);
   out << "</svg>\n";
   return true;
 }
 
-bool ExportCanvasRaster(const Canvas &canvas, const string &filename) {
-  RenderTexture2D target = LoadRenderTexture(GetScreenWidth(), GetScreenHeight());
+bool ExportCanvasRaster(const Canvas &canvas, const string &filename,
+                        const vector<Element> &elements, const Camera2D &camera,
+                        int outWidth, int outHeight) {
+  RenderTexture2D target = LoadRenderTexture(outWidth, outHeight);
   BeginTextureMode(target);
   ClearBackground(canvas.backgroundColor);
-  BeginMode2D(canvas.camera);
-  DrawBackgroundPattern(canvas);
-  for (const auto &el : canvas.elements)
+  BeginMode2D(camera);
+  for (const auto &el : elements)
     DrawElement(el, canvas.font, canvas.textSize);
   EndMode2D();
   EndTextureMode();
@@ -1555,6 +1630,56 @@ bool TryLoadFont(Canvas &canvas, const AppConfig &cfg, const string &nameOrPath)
   canvas.font = newFont;
   canvas.ownsFont = true;
   canvas.fontFamilyPath = path;
+  return true;
+}
+
+bool BuildExportScene(const Canvas &canvas, ExportScope scope, float rasterScale,
+                      vector<Element> &elementsOut, Camera2D &cameraOut,
+                      int &widthOut, int &heightOut, string &errorOut) {
+  elementsOut.clear();
+  if (scope == EXPORT_SELECTED) {
+    vector<int> ids = GetSelectedIDs(canvas);
+    for (int id : ids) {
+      int idx = FindElementIndexByID(canvas, id);
+      if (idx >= 0 && idx < (int)canvas.elements.size())
+        elementsOut.push_back(canvas.elements[idx]);
+    }
+    if (elementsOut.empty()) {
+      errorOut = "No selected elements to export";
+      return false;
+    }
+  } else {
+    elementsOut = canvas.elements;
+  }
+
+  if (scope == EXPORT_FRAME) {
+    float scale = max(1.0f, rasterScale);
+    cameraOut = canvas.camera;
+    cameraOut.zoom *= scale;
+    cameraOut.offset = {canvas.camera.offset.x * scale,
+                        canvas.camera.offset.y * scale};
+    widthOut = max(1, (int)roundf((float)GetScreenWidth() * scale));
+    heightOut = max(1, (int)roundf((float)GetScreenHeight() * scale));
+    return true;
+  }
+
+  Rectangle bounds{};
+  if (!UnionBounds(elementsOut, bounds)) {
+    errorOut = "Nothing to export";
+    return false;
+  }
+
+  float scale = max(1.0f, rasterScale);
+  float pad = max(12.0f, 24.0f * scale);
+  Rectangle padded = ExpandRect(bounds, pad / scale);
+  widthOut = max(1, (int)ceilf(padded.width * scale));
+  heightOut = max(1, (int)ceilf(padded.height * scale));
+
+  cameraOut = {};
+  cameraOut.rotation = 0.0f;
+  cameraOut.zoom = scale;
+  cameraOut.target = {padded.x, padded.y};
+  cameraOut.offset = {0.0f, 0.0f};
   return true;
 }
 
@@ -1821,17 +1946,25 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
 
     int typeIdx = -1;
     string type = "png";
+    ExportScope scope = EXPORT_ALL;
+    bool scopeSet = false;
     for (int i = 0; i < (int)normalized.size(); i++) {
       if (IsExportType(normalized[i])) {
         typeIdx = i;
         type = NormalizeExportType(normalized[i]);
-        break;
+        continue;
+      }
+      if (IsExportScopeToken(normalized[i])) {
+        scope = ParseExportScope(normalized[i]);
+        scopeSet = true;
       }
     }
 
     vector<string> rest;
     for (int i = 0; i < (int)normalized.size(); i++) {
-      if (i != typeIdx)
+      bool isType = (i == typeIdx) && IsExportType(normalized[i]);
+      bool isScope = IsExportScopeToken(normalized[i]);
+      if (!isType && !isScope)
         rest.push_back(normalized[i]);
     }
 
@@ -1851,7 +1984,9 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
       else
         filename = filesystem::path(rest[0]).stem().string();
     } else if (rest.size() >= 2) {
-      if (typeIdx == 2 && normalized.size() >= 3) {
+      bool firstLooksDir = LooksLikeDirPath(rest[0]) || HasDirectoryPart(rest[0]);
+      bool secondLooksDir = LooksLikeDirPath(rest[1]) || HasDirectoryPart(rest[1]);
+      if (firstLooksDir && !secondLooksDir) {
         outDir = ExpandUserPath(rest[0]);
         filename = filesystem::path(rest[1]).stem().string();
       } else {
@@ -1869,11 +2004,25 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
     }
     string fullPath = JoinPath(outDir, outName);
 
+    vector<Element> exportElements;
+    Camera2D exportCamera{};
+    int exportW = 0;
+    int exportH = 0;
+    string exportErr;
+    float sceneScale = (type == "svg") ? 1.0f : cfg.exportRasterScale;
+    if (!BuildExportScene(canvas, scope, sceneScale, exportElements,
+                          exportCamera, exportW, exportH, exportErr)) {
+      SetStatus(canvas, cfg, "Export failed: " + exportErr);
+      return;
+    }
+
     bool ok = false;
     if (type == "svg")
-      ok = ExportCanvasSvg(canvas, fullPath);
+      ok = ExportCanvasSvg(canvas, fullPath, exportElements, exportCamera, exportW,
+                           exportH);
     else
-      ok = ExportCanvasRaster(canvas, fullPath);
+      ok = ExportCanvasRaster(canvas, fullPath, exportElements, exportCamera,
+                              exportW, exportH);
 
     if (ok)
       SetStatus(canvas, cfg, "Exported " + fullPath);
@@ -1907,8 +2056,13 @@ int main() {
   int screenWidth = cfg.windowWidth;
   int screenHeight = cfg.windowHeight;
   Canvas canvas;
-  SetConfigFlags(FLAG_MSAA_4X_HINT);
+  unsigned int windowFlags = FLAG_MSAA_4X_HINT | FLAG_WINDOW_RESIZABLE;
+  if (cfg.startMaximized)
+    windowFlags |= FLAG_WINDOW_MAXIMIZED;
+  SetConfigFlags(windowFlags);
   InitWindow(screenWidth, screenHeight, cfg.windowTitle.c_str());
+  if (cfg.startMaximized)
+    MaximizeWindow();
   SetWindowMinSize(cfg.minWindowWidth, cfg.minWindowHeight);
   SetExitKey(KEY_NULL);
   SetTargetFPS(cfg.targetFps);
