@@ -270,8 +270,6 @@ void SaveBackup(Canvas &canvas) {
   canvas.redoStack.clear();
 }
 
-// helper: ensure element (and its children if group) has a non-negative
-// uniqueID
 void EnsureUniqueIDRecursive(Element &el, Canvas &canvas) {
   if (el.uniqueID < 0) {
     el.uniqueID = canvas.nextElementId++;
@@ -786,7 +784,6 @@ void DrawElement(const Element &el, const Font &font, float textSize) {
       }
       DrawCircleV(p, el.strokeWidth / 2, el.color);
     }
-    // Catmull-Rom requires at least 4 points to calculate the curve
     else if (pointCount >= 4) {
       if (el.rotation == 0.0f) {
         DrawSplineCatmullRom(el.path.data(), pointCount, el.strokeWidth,
@@ -801,7 +798,6 @@ void DrawElement(const Element &el, const Font &font, float textSize) {
                              el.strokeWidth, el.color);
       }
     }
-    // Fallback for 2 or 3 points: Draw straight lines
     else if (pointCount > 1) {
       if (el.rotation == 0.0f) {
         DrawLineStrip(el.path.data(), pointCount, el.color);
@@ -919,9 +915,7 @@ void RestoreZOrder(Canvas &canvas) {
   };
   vector<PendingRestore> toRestore;
 
-  // Process selected indices from top to bottom so erase doesn't shift
-  // yet-to-be-processed indices
-  sort(canvas.selectedIndices.begin(), canvas.selectedIndices.end(),
+ sort(canvas.selectedIndices.begin(), canvas.selectedIndices.end(),
        greater<int>());
 
   for (int idx : canvas.selectedIndices) {
@@ -1516,7 +1510,7 @@ void LoadConfig(AppConfig &cfg) {
     else if (key == "window.start_maximized" && ParseBool(value, bv))
       cfg.startMaximized = bv;
     else if (key == "window.start_fullscreen" && ParseBool(value, bv))
-      cfg.startMaximized = bv; // backward compatibility
+      cfg.startMaximized = bv;
     else if (key == "app.target_fps" && ParseIntValue(value, iv))
       cfg.targetFps = max(1, iv);
     else if (key == "app.status_seconds" && ParsePositiveFloat(value, fv))
@@ -2760,7 +2754,6 @@ int main() {
         for (const auto &item : canvas.clipboard) {
           Element cloned = item;
 
-          // Assign a fresh ID to the copy (and ensure children have IDs)
           cloned.uniqueID = canvas.nextElementId++;
           if (cloned.type == GROUP_MODE) {
             for (auto &c : cloned.children)
@@ -2780,7 +2773,6 @@ int main() {
       SetMode(canvas, cfg, PEN_MODE);
     }
 
-    // Other mode keys
     if (!canvas.isTextEditing &&
         IsActionPressed(cfg, "mode_selection", shiftDown, ctrlDown, altDown)) {
       SetMode(canvas, cfg, SELECTION_MODE);
@@ -2842,7 +2834,6 @@ int main() {
          IsActionPressed(cfg, "group_toggle", false, ctrlDown, altDown));
     if (!canvas.isTextEditing && groupTogglePressed) {
       if (shiftDown) {
-        // Ungroup selected group(s)
         if (!canvas.selectedIndices.empty()) {
           SaveBackup(canvas);
           vector<int> sorted = canvas.selectedIndices;
@@ -2852,7 +2843,6 @@ int main() {
                 canvas.elements[idx].type == GROUP_MODE) {
               Element g = canvas.elements[idx];
               canvas.elements.erase(canvas.elements.begin() + idx);
-              // push children back to canvas (children already have IDs)
               for (auto &child : g.children) {
                 canvas.elements.push_back(child);
               }
@@ -2861,14 +2851,13 @@ int main() {
           canvas.selectedIndices.clear();
         }
       } else if (canvas.selectedIndices.size() > 1) {
-        // Group selected elements into a single group
         SaveBackup(canvas);
         Element group;
         group.type = GROUP_MODE;
         group.strokeWidth = canvas.strokeWidth;
         group.color = canvas.drawColor;
         group.uniqueID =
-            canvas.nextElementId++; // assign ID to the group itself
+            canvas.nextElementId++;
 
         vector<int> sorted = canvas.selectedIndices;
         sort(sorted.begin(), sorted.end(), greater<int>());
@@ -2880,7 +2869,6 @@ int main() {
         }
         Rectangle gb = group.GetBounds();
         group.start = {gb.x, gb.y};
-        // Ensure children have valid IDs
         for (auto &c : group.children)
           EnsureUniqueIDRecursive(c, canvas);
 
@@ -2958,7 +2946,6 @@ int main() {
       canvas.selectedIndices.clear();
     }
 
-    // SELECTION MODE specific behavior
     if (canvas.mode == MOVE_MODE) {
       if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
         Vector2 delta = GetMouseDelta();
@@ -2979,9 +2966,7 @@ int main() {
         }
         canvas.lastInputTime = currentTime;
 
-        // We use uniqueID for tagging and selection. Find element with that
-        // uniqueID.
-        RestoreZOrder(canvas);
+       RestoreZOrder(canvas);
         int foundIdx = FindElementIndexByID(canvas, canvas.inputNumber);
         if (foundIdx != -1) {
           SaveBackup(canvas);
@@ -3454,7 +3439,6 @@ int main() {
         }
       }
     } else {
-      // Drawing modes (line, rect, circle, pen,...)
       if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
         canvas.startPoint = mouseWorld;
         canvas.currentMouse = canvas.startPoint;
@@ -3484,7 +3468,6 @@ int main() {
           newEl.color = canvas.drawColor;
           newEl.originalIndex = -1;
 
-          // Assign the permanent ID and increment the counter
           newEl.uniqueID = canvas.nextElementId++;
 
           if (canvas.mode == PEN_MODE)
@@ -3494,9 +3477,8 @@ int main() {
       }
     }
 
-    } // end non-command input handling
+    }
 
-    // --- Drawing
     BeginDrawing();
     ClearBackground(canvas.backgroundColor);
     BeginMode2D(canvas.camera);
@@ -3572,16 +3554,13 @@ int main() {
         }
       }
       if (canvas.showTags) {
-        // Stable displayed ID: uniqueID (always >= 0)
         int displayId = canvas.elements[i].uniqueID;
         if (displayId < 0) {
-          // If somehow missing, ensure we assign one (defensive)
           Element &mut = const_cast<Element &>(canvas.elements[i]);
           EnsureUniqueIDRecursive(mut, canvas);
           displayId = mut.uniqueID;
         }
 
-        // draw tag near element start
         float tx = canvas.elements[i].start.x;
         float ty = canvas.elements[i].start.y - 22.0f;
         DrawRectangle((int)tx, (int)ty, 24, 22, YELLOW);
