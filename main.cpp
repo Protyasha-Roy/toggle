@@ -333,6 +333,188 @@ Vector2 ElementCenterLocal(const Element &el) {
   return {b.x + b.width * 0.5f, b.y + b.height * 0.5f};
 }
 
+bool LineIntersectsRect(Vector2 a, Vector2 b, Rectangle r) {
+  Vector2 r1 = {r.x, r.y};
+  Vector2 r2 = {r.x + r.width, r.y};
+  Vector2 r3 = {r.x + r.width, r.y + r.height};
+  Vector2 r4 = {r.x, r.y + r.height};
+  if (CheckCollisionPointRec(a, r) || CheckCollisionPointRec(b, r))
+    return true;
+  if (CheckCollisionLines(a, b, r1, r2, nullptr))
+    return true;
+  if (CheckCollisionLines(a, b, r2, r3, nullptr))
+    return true;
+  if (CheckCollisionLines(a, b, r3, r4, nullptr))
+    return true;
+  if (CheckCollisionLines(a, b, r4, r1, nullptr))
+    return true;
+  return false;
+}
+
+bool PointInQuad(Vector2 p, Vector2 a, Vector2 b, Vector2 c, Vector2 d) {
+  auto cross = [](Vector2 u, Vector2 v) { return u.x * v.y - u.y * v.x; };
+  Vector2 ab = {b.x - a.x, b.y - a.y};
+  Vector2 bc = {c.x - b.x, c.y - b.y};
+  Vector2 cd = {d.x - c.x, d.y - c.y};
+  Vector2 da = {a.x - d.x, a.y - d.y};
+  Vector2 ap = {p.x - a.x, p.y - a.y};
+  Vector2 bp = {p.x - b.x, p.y - b.y};
+  Vector2 cp = {p.x - c.x, p.y - c.y};
+  Vector2 dp = {p.x - d.x, p.y - d.y};
+  float c1 = cross(ab, ap);
+  float c2 = cross(bc, bp);
+  float c3 = cross(cd, cp);
+  float c4 = cross(da, dp);
+  bool hasNeg = (c1 < 0) || (c2 < 0) || (c3 < 0) || (c4 < 0);
+  bool hasPos = (c1 > 0) || (c2 > 0) || (c3 > 0) || (c4 > 0);
+  return !(hasNeg && hasPos);
+}
+
+bool IsPointInSelectionVisual(const Element &el, Vector2 p) {
+  const float rectPad = 5.0f;
+  const float linePad = 6.0f;
+  Color selColor = {70, 140, 160, 255};
+  (void)selColor;
+
+  if (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE ||
+      el.type == ARROWLINE_MODE) {
+    Vector2 s = el.start;
+    Vector2 e = el.end;
+    if (el.rotation != 0.0f) {
+      Vector2 center = ElementCenterLocal(el);
+      s = RotatePoint(s, center, el.rotation);
+      e = RotatePoint(e, center, el.rotation);
+    }
+    float length = Vector2Distance(s, e);
+    if (length < 0.01f) {
+      Rectangle b = el.GetBounds();
+      Rectangle expanded = {b.x - rectPad, b.y - rectPad, b.width + 2 * rectPad,
+                            b.height + 2 * rectPad};
+      return CheckCollisionPointRec(p, expanded);
+    }
+    float width = length + linePad * 2.0f;
+    float height = el.strokeWidth + linePad * 2.0f;
+    Vector2 center = {(s.x + e.x) * 0.5f, (s.y + e.y) * 0.5f};
+    float rad = atan2f(e.y - s.y, e.x - s.x);
+    Vector2 hx = {cosf(rad) * (width * 0.5f), sinf(rad) * (width * 0.5f)};
+    Vector2 hy = {-sinf(rad) * (height * 0.5f), cosf(rad) * (height * 0.5f)};
+    Vector2 c1 = Vector2Subtract(Vector2Subtract(center, hx), hy);
+    Vector2 c2 = Vector2Add(Vector2Subtract(center, hx), hy);
+    Vector2 c3 = Vector2Add(Vector2Add(center, hx), hy);
+    Vector2 c4 = Vector2Subtract(Vector2Add(center, hx), hy);
+    return PointInQuad(p, c1, c2, c3, c4);
+  }
+
+  Rectangle b = el.GetLocalBounds();
+  Rectangle expanded = {b.x - rectPad, b.y - rectPad, b.width + 2 * rectPad,
+                        b.height + 2 * rectPad};
+  if (el.rotation == 0.0f ||
+      el.type == CIRCLE_MODE || el.type == DOTTEDCIRCLE_MODE ||
+      el.type == GROUP_MODE) {
+    return CheckCollisionPointRec(p, expanded);
+  }
+
+  Vector2 center = ElementCenterLocal(el);
+  Vector2 tl = RotatePoint({expanded.x, expanded.y}, center, el.rotation);
+  Vector2 tr =
+      RotatePoint({expanded.x + expanded.width, expanded.y}, center, el.rotation);
+  Vector2 br = RotatePoint({expanded.x + expanded.width,
+                            expanded.y + expanded.height},
+                           center, el.rotation);
+  Vector2 bl =
+      RotatePoint({expanded.x, expanded.y + expanded.height}, center,
+                  el.rotation);
+  return PointInQuad(p, tl, tr, br, bl);
+}
+
+bool ElementIntersectsRect(const Element &el, Rectangle r, float tol) {
+  Rectangle expanded = {r.x - tol, r.y - tol, r.width + 2 * tol,
+                        r.height + 2 * tol};
+  if (el.type == GROUP_MODE) {
+    for (const auto &child : el.children) {
+      if (ElementIntersectsRect(child, r, tol))
+        return true;
+    }
+    return false;
+  }
+
+  if (el.type == LINE_MODE || el.type == DOTTEDLINE_MODE ||
+      el.type == ARROWLINE_MODE) {
+    Vector2 s = el.start;
+    Vector2 e = el.end;
+    if (el.rotation != 0.0f) {
+      Vector2 center = ElementCenterLocal(el);
+      s = RotatePoint(s, center, el.rotation);
+      e = RotatePoint(e, center, el.rotation);
+    }
+    return LineIntersectsRect(s, e, expanded);
+  }
+
+  if (el.type == CIRCLE_MODE || el.type == DOTTEDCIRCLE_MODE) {
+    float rads = Vector2Distance(el.start, el.end) + el.strokeWidth * 0.5f + tol;
+    float cx = Clamp(el.start.x, expanded.x, expanded.x + expanded.width);
+    float cy = Clamp(el.start.y, expanded.y, expanded.y + expanded.height);
+    float dx = el.start.x - cx;
+    float dy = el.start.y - cy;
+    return (dx * dx + dy * dy) <= (rads * rads);
+  }
+
+  if (el.type == PEN_MODE) {
+    Vector2 center = ElementCenterLocal(el);
+    if (el.path.empty())
+      return false;
+    Vector2 prev = el.path[0];
+    if (el.rotation != 0.0f)
+      prev = RotatePoint(prev, center, el.rotation);
+    if (CheckCollisionPointRec(prev, expanded))
+      return true;
+    for (size_t i = 1; i < el.path.size(); ++i) {
+      Vector2 cur = el.path[i];
+      if (el.rotation != 0.0f)
+        cur = RotatePoint(cur, center, el.rotation);
+      if (LineIntersectsRect(prev, cur, expanded))
+        return true;
+      prev = cur;
+    }
+    return false;
+  }
+
+  Rectangle b = el.GetLocalBounds();
+  Vector2 center = ElementCenterLocal(el);
+  Vector2 tl = {b.x, b.y};
+  Vector2 tr = {b.x + b.width, b.y};
+  Vector2 br = {b.x + b.width, b.y + b.height};
+  Vector2 bl = {b.x, b.y + b.height};
+  if (el.rotation != 0.0f &&
+      (el.type == RECTANGLE_MODE || el.type == DOTTEDRECT_MODE ||
+       el.type == TEXT_MODE)) {
+    tl = RotatePoint(tl, center, el.rotation);
+    tr = RotatePoint(tr, center, el.rotation);
+    br = RotatePoint(br, center, el.rotation);
+    bl = RotatePoint(bl, center, el.rotation);
+  }
+
+  if (PointInQuad({expanded.x, expanded.y}, tl, tr, br, bl) ||
+      PointInQuad({expanded.x + expanded.width, expanded.y}, tl, tr, br, bl) ||
+      PointInQuad({expanded.x + expanded.width, expanded.y + expanded.height}, tl,
+                  tr, br, bl) ||
+      PointInQuad({expanded.x, expanded.y + expanded.height}, tl, tr, br, bl))
+    return true;
+  if (CheckCollisionPointRec(tl, expanded) ||
+      CheckCollisionPointRec(tr, expanded) ||
+      CheckCollisionPointRec(br, expanded) ||
+      CheckCollisionPointRec(bl, expanded))
+    return true;
+
+  if (LineIntersectsRect(tl, tr, expanded) ||
+      LineIntersectsRect(tr, br, expanded) ||
+      LineIntersectsRect(br, bl, expanded) ||
+      LineIntersectsRect(bl, tl, expanded))
+    return true;
+
+  return false;
+}
+
 bool IsPointOnElement(const Element &el, Vector2 p, float tolerance) {
   Vector2 localP = p;
   if (el.rotation != 0.0f && el.type != CIRCLE_MODE &&
@@ -403,10 +585,7 @@ bool IsPointOnSelectedBounds(const Canvas &canvas, Vector2 p) {
   for (int i = (int)canvas.selectedIndices.size() - 1; i >= 0; --i) {
     int idx = canvas.selectedIndices[i];
     if (idx >= 0 && idx < (int)canvas.elements.size()) {
-      Rectangle b = canvas.elements[idx].GetBounds();
-      Rectangle expanded = {b.x - 5.0f, b.y - 5.0f, b.width + 10.0f,
-                            b.height + 10.0f};
-      if (CheckCollisionPointRec(p, expanded))
+      if (IsPointInSelectionVisual(canvas.elements[idx], p))
         return true;
     }
   }
@@ -2787,6 +2966,7 @@ int main() {
         canvas.camera.target.y -= delta.y / canvas.camera.zoom;
       }
     } else if (canvas.mode == SELECTION_MODE) {
+      float hitTol = cfg.defaultHitTolerance / canvas.camera.zoom;
       if (key >= KEY_ZERO && key <= KEY_NINE) {
         double currentTime = GetTime();
         int digit = key - KEY_ZERO;
@@ -2880,15 +3060,12 @@ int main() {
         bool hitSelectedBounds =
             !canvas.selectedIndices.empty() &&
             IsPointOnSelectedBounds(canvas, canvas.startPoint);
-        float hitTol = cfg.defaultHitTolerance / canvas.camera.zoom;
         if (hitSelectedBounds) {
           for (int i = (int)canvas.selectedIndices.size() - 1; i >= 0; --i) {
             int idx = canvas.selectedIndices[i];
             if (idx >= 0 && idx < (int)canvas.elements.size()) {
-              Rectangle b = canvas.elements[idx].GetBounds();
-              Rectangle expanded = {b.x - 5.0f, b.y - 5.0f, b.width + 10.0f,
-                                    b.height + 10.0f};
-              if (CheckCollisionPointRec(canvas.startPoint, expanded)) {
+              if (IsPointInSelectionVisual(canvas.elements[idx],
+                                           canvas.startPoint)) {
                 hitIndex = idx;
                 hit = true;
                 break;
@@ -2953,8 +3130,8 @@ int main() {
                 abs(canvas.currentMouse.x - canvas.startPoint.x),
                 abs(canvas.currentMouse.y - canvas.startPoint.y)};
             for (int i = 0; i < (int)canvas.elements.size(); i++) {
-              if (CheckCollisionRecs(selectionBox,
-                                     canvas.elements[i].GetBounds())) {
+              if (ElementIntersectsRect(canvas.elements[i], selectionBox,
+                                        hitTol)) {
                 canvas.selectedIndices.push_back(i);
                 if (canvas.elements[i].originalIndex == -1)
                   canvas.elements[i].originalIndex = i;
