@@ -1,31 +1,70 @@
 # toggle
 
-Straightforward drawing app with fast keyboard workflows.
+Fast, keyboard‑driven drawing app built with raylib.
 
-**Quick Start**
-1. Build: `g++ main.cpp -lraylib -lGL -lm -lpthread -ldl -lrt -o toggle`
-2. Run: `./toggle`
-3. Enter command mode: `Shift+;` then type `:w` to save.
+## Install (Linux/macOS)
 
-**Modes**
+### Dependencies
+- CMake 3.16+
+- C++17 compiler
+- raylib (dynamic, system‑installed)
+
+On Arch:
+```bash
+sudo pacman -S raylib cmake ninja
+```
+
+On Ubuntu/Debian:
+```bash
+sudo apt install libraylib-dev cmake ninja-build
+```
+
+On macOS (Homebrew):
+```bash
+brew install raylib cmake ninja
+```
+
+### Build
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+### Run
+```bash
+./build/toggle
+```
+
+### Install system‑wide (optional)
+```bash
+sudo cmake --install build --prefix /usr/local
+```
+
+## Cheatsheet
+
+### Modes
 - `S` Selection
 - `M` Move (pan)
 - `P` Pen
-- `L` Line (use `D` for dotted, `A` for arrow before `L`)
-- `C` Circle (use `D` for dotted before `C`)
-- `Ctrl+R` Rectangle (use `D` for dotted before `Ctrl+R`)
+- `L` Line
+- `C` Circle
+- `Ctrl+R` Rectangle
 - `R` or `Shift+R` Resize/Rotate
 - `E` Eraser
 - `T` Text
 
-**Mouse Basics**
-- Selection mode: click to select, drag selection to move, drag empty space to box‑select.
-- Resize/Rotate mode: click element to select, drag handles to resize, drag rotate handle to rotate.
-- Text mode: click existing text to edit, click empty space to place new text.
+### Mode prefixes (press before the mode key)
+- `D` dotted (line, circle, rectangle)
+- `A` arrow (line only)
+
+### Mouse basics
+- Selection: click to select, drag selected to move, drag empty space to box‑select.
+- Resize/Rotate: drag handles to resize, drag rotate handle to rotate, drag inside to move.
+- Text: click text to edit, click empty space to place.
 - Move mode: drag to pan.
 - Pen/shape modes: click‑drag to draw.
 
-**Selection & Ordering**
+### Selection & order
 - `Ctrl+A` select all
 - `X` delete selection
 - `[` move selection backward
@@ -36,19 +75,19 @@ Straightforward drawing app with fast keyboard workflows.
 - `J` / `K` select next/previous tag
 - Number keys select element by ID (when tags are visible)
 
-**Edit & History**
+### Edit & history
 - `U` or `Ctrl+Z` undo
 - `Shift+U`, `Ctrl+Y`, or `Ctrl+Shift+Z` redo
 - `Y` copy
 - `Shift+P` paste
 - `=` / `-` increase/decrease stroke width
 
-**View**
+### View
 - Mouse wheel zoom
 - `Shift+=` / `Shift+-` zoom in/out (also `KP+` / `KP-`)
 - `Tab` toggle status bar
 
-**Command Mode**
+### Command mode
 Press `Shift+;` to open command mode, then type commands:
 
 **File**
@@ -77,6 +116,24 @@ Press `Shift+;` to open command mode, then type commands:
 - `:reloadconfig`
 - `:writeconfig`
 
-**Notes**
-- In resize/rotate mode, handles are drawn on the selected element. Drag the top handle to rotate.
-- The default background is blank. Use `:type grid` or `:type dotted` if you want guides.
+## Features (complete)
+- Freehand pen drawing.
+- Lines (solid, dotted, arrow).
+- Circles (solid, dotted).
+- Rectangles (solid, dotted).
+- Text tool with in‑place editing.
+- Eraser tool.
+- Selection, multi‑selection, box select.
+- Move/pan mode.
+- Resize and rotate any element.
+- Group / ungroup elements.
+- Z‑order control (forward/backward).
+- Copy/paste with offset.
+- Tag IDs for fast selection (J/K and numeric jump).
+- Undo/redo.
+- Zoom in/out.
+- Status bar toggle.
+- Dark/light themes.
+- Background types: blank, grid, dotted.
+- Export to PNG/JPG/SVG (all/selected/frame).
+- Config reload/write and runtime commands.
