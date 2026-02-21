@@ -9,6 +9,13 @@ Fast, keyboard‑driven drawing app built with raylib.
 - C++17 compiler
 - raylib (dynamic, system‑installed)
 
+Clone the repo first.
+Go to the directory with:
+```bash
+cd toggle
+```
+
+
 On Arch:
 ```bash
 sudo pacman -S raylib cmake ninja
@@ -32,7 +39,7 @@ cmake --build build
 
 ### Run
 ```bash
-./build/toggle
+./toggle
 ```
 
 ### Install system‑wide (optional)

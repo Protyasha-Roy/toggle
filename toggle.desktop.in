@@ -2,6 +2,6 @@
 Type=Application
 Name=toggle
 Comment=Fast, keyboard-driven drawing app
-Exec=toggle
+Exec=@CMAKE_INSTALL_PREFIX@/bin/toggle
 Terminal=false
 Categories=Graphics;2DGraphics;Utility;

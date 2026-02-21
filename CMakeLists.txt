@@ -17,4 +17,7 @@ endif()
 install(TARGETS toggle RUNTIME DESTINATION bin)
 install(FILES IosevkaNerdFontMono-Regular.ttf DESTINATION share/toggle)
 install(DIRECTORY config DESTINATION share/toggle)
-install(FILES toggle.desktop DESTINATION share/applications)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/toggle.desktop.in
+               ${CMAKE_CURRENT_BINARY_DIR}/toggle.desktop @ONLY)
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/toggle.desktop
+        DESTINATION share/applications)
