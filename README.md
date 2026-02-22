@@ -42,6 +42,19 @@ Built with C++ and Raylib.
 | `al` | Arrow line | `c` | Circle |
 | `dc` | Dotted circle | `r` | Rectangle |
 | `dr` | Dotted rectangle | `f` | Toggle numbered hints |
+| `o` | anti-mouse mode | 
+
+
+### Anti-mouse mode
+On anti mouse mode you can move your cursor as well as any element(s) without the mouse.
+
+In order to move the cursor type 'o' and then you will see a red + on the top-left corner of the canvas.
+
+Now use ctrl + WASD to move around. And comma(,) to press left. In case of creating rectangles and selecting in selection mode, you need to trigger selection with two movements after pressing ctrl + ,
+
+So it's like ctrl + , + DW (you can go anyside after this).
+
+And to move elements like this just use Shift + WASD.
 
 ### Actions
 

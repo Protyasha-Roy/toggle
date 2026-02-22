@@ -259,6 +259,12 @@ struct Canvas {
   Vector2 transformCenter = {0.0f, 0.0f};
   Vector2 transformStartMouse = {0.0f, 0.0f};
   float transformStartAngle = 0.0f;
+  bool antiMouseMode = false;
+  Vector2 antiMousePos = {0.0f, 0.0f};
+  Vector2 antiMouseVel = {0.0f, 0.0f};
+  Vector2 lastMouseScreen = {0.0f, 0.0f};
+  Vector2 keyMoveVel = {0.0f, 0.0f};
+  bool keyMoveActive = false;
 };
 
 void RestoreZOrder(Canvas &canvas);
@@ -1390,7 +1396,7 @@ void SetDefaultKeymap(AppConfig &cfg) {
   AddDefaultBinding(cfg, "z_forward", "Right_Bracket");
   AddDefaultBinding(cfg, "select_next_tag", "J");
   AddDefaultBinding(cfg, "select_prev_tag", "K");
-  AddDefaultBinding(cfg, "select_all", "Ctrl+A");
+  AddDefaultBinding(cfg, "select_all", "Ctrl+O");
 }
 
 void WriteDefaultConfig(const AppConfig &cfg) {
@@ -2605,6 +2611,7 @@ int main() {
   canvas.bgType = cfg.defaultBgType;
   SetTheme(canvas, cfg, cfg.defaultDarkTheme);
   SetMode(canvas, cfg, PEN_MODE);
+  canvas.lastMouseScreen = GetMousePosition();
 
   while (!WindowShouldClose()) {
     bool escPressed = IsKeyPressed(KEY_ESCAPE);
@@ -2618,8 +2625,168 @@ int main() {
     bool shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
     bool ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
     bool altDown = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
-    Vector2 mouseScreen = GetMousePosition();
+    if (!canvas.isTextEditing && !canvas.commandMode &&
+        IsKeyPressed(KEY_O)) {
+      canvas.antiMouseMode = !canvas.antiMouseMode;
+      if (canvas.antiMouseMode) {
+        canvas.antiMousePos = GetMousePosition();
+        canvas.antiMouseVel = {0.0f, 0.0f};
+        HideCursor();
+      } else {
+        ShowCursor();
+      }
+      canvas.lastMouseScreen =
+          canvas.antiMouseMode ? canvas.antiMousePos : GetMousePosition();
+    }
+    if (canvas.antiMouseMode && !canvas.isTextEditing && !canvas.commandMode &&
+        IsKeyPressed(KEY_M)) {
+      SetMode(canvas, cfg, MOVE_MODE);
+    }
+    if (canvas.antiMouseMode && !canvas.isTextEditing && !canvas.commandMode) {
+      const float maxSpeed = 900.0f;
+      const float accel = 4200.0f;
+      const float tapStep = 2.0f;
+      float dt = GetFrameTime();
+      Vector2 dir = {0.0f, 0.0f};
+      Vector2 pressDir = {0.0f, 0.0f};
+      bool pressedMove = false;
+      if (ctrlDown) {
+        if (IsKeyDown(KEY_W))
+          dir.y -= 1.0f;
+        if (IsKeyDown(KEY_S))
+          dir.y += 1.0f;
+        if (IsKeyDown(KEY_A))
+          dir.x -= 1.0f;
+        if (IsKeyDown(KEY_D))
+          dir.x += 1.0f;
+        if (IsKeyPressed(KEY_W)) {
+          pressDir.y -= 1.0f;
+          pressedMove = true;
+        }
+        if (IsKeyPressed(KEY_S)) {
+          pressDir.y += 1.0f;
+          pressedMove = true;
+        }
+        if (IsKeyPressed(KEY_A)) {
+          pressDir.x -= 1.0f;
+          pressedMove = true;
+        }
+        if (IsKeyPressed(KEY_D)) {
+          pressDir.x += 1.0f;
+          pressedMove = true;
+        }
+      }
+      if (pressedMove && (pressDir.x != 0.0f || pressDir.y != 0.0f)) {
+        pressDir = Vector2Normalize(pressDir);
+        canvas.antiMousePos.x += pressDir.x * tapStep;
+        canvas.antiMousePos.y += pressDir.y * tapStep;
+      }
+      if (dir.x != 0.0f || dir.y != 0.0f) {
+        dir = Vector2Normalize(dir);
+        canvas.antiMouseVel.x += dir.x * accel * dt;
+        canvas.antiMouseVel.y += dir.y * accel * dt;
+        float speed = Vector2Length(canvas.antiMouseVel);
+        if (speed > maxSpeed) {
+          canvas.antiMouseVel =
+              Vector2Scale(Vector2Normalize(canvas.antiMouseVel), maxSpeed);
+        }
+      } else {
+        canvas.antiMouseVel = {0.0f, 0.0f};
+      }
+      canvas.antiMousePos.x += canvas.antiMouseVel.x * dt;
+      canvas.antiMousePos.y += canvas.antiMouseVel.y * dt;
+      canvas.antiMousePos.x =
+          Clamp(canvas.antiMousePos.x, 0.0f, (float)GetScreenWidth());
+      canvas.antiMousePos.y =
+          Clamp(canvas.antiMousePos.y, 0.0f, (float)GetScreenHeight());
+    }
+    Vector2 mouseScreen =
+        canvas.antiMouseMode ? canvas.antiMousePos : GetMousePosition();
     Vector2 mouseWorld = GetScreenToWorld2D(mouseScreen, canvas.camera);
+    Vector2 mouseDelta = Vector2Subtract(mouseScreen, canvas.lastMouseScreen);
+    bool mouseLeftPressed = canvas.antiMouseMode
+                                ? IsKeyPressed(KEY_COMMA)
+                                : IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
+    bool mouseLeftDown = canvas.antiMouseMode
+                             ? IsKeyDown(KEY_COMMA)
+                             : IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+    bool mouseLeftReleased = canvas.antiMouseMode
+                                 ? IsKeyReleased(KEY_COMMA)
+                                 : IsMouseButtonReleased(MOUSE_LEFT_BUTTON);
+
+    if (!canvas.isTextEditing && !canvas.commandMode && shiftDown &&
+        !canvas.selectedIndices.empty()) {
+      const float maxSpeed = 900.0f;
+      const float accel = 4200.0f;
+      const float tapStep = 2.0f;
+      float dt = GetFrameTime();
+      Vector2 dir = {0.0f, 0.0f};
+      Vector2 pressDir = {0.0f, 0.0f};
+      bool pressedMove = false;
+      if (IsKeyDown(KEY_W))
+        dir.y -= 1.0f;
+      if (IsKeyDown(KEY_S))
+        dir.y += 1.0f;
+      if (IsKeyDown(KEY_A))
+        dir.x -= 1.0f;
+      if (IsKeyDown(KEY_D))
+        dir.x += 1.0f;
+      if (IsKeyPressed(KEY_W)) {
+        pressDir.y -= 1.0f;
+        pressedMove = true;
+      }
+      if (IsKeyPressed(KEY_S)) {
+        pressDir.y += 1.0f;
+        pressedMove = true;
+      }
+      if (IsKeyPressed(KEY_A)) {
+        pressDir.x -= 1.0f;
+        pressedMove = true;
+      }
+      if (IsKeyPressed(KEY_D)) {
+        pressDir.x += 1.0f;
+        pressedMove = true;
+      }
+      if (pressedMove && (pressDir.x != 0.0f || pressDir.y != 0.0f)) {
+        pressDir = Vector2Normalize(pressDir);
+        Vector2 tap = {pressDir.x * tapStep / canvas.camera.zoom,
+                       pressDir.y * tapStep / canvas.camera.zoom};
+        if (!canvas.keyMoveActive) {
+          SaveBackup(canvas);
+          canvas.keyMoveActive = true;
+        }
+        for (int idx : canvas.selectedIndices) {
+          if (idx >= 0 && idx < (int)canvas.elements.size())
+            MoveElement(canvas.elements[idx], tap);
+        }
+      }
+      if (dir.x != 0.0f || dir.y != 0.0f) {
+        dir = Vector2Normalize(dir);
+        canvas.keyMoveVel.x += dir.x * accel * dt;
+        canvas.keyMoveVel.y += dir.y * accel * dt;
+        float speed = Vector2Length(canvas.keyMoveVel);
+        if (speed > maxSpeed) {
+          canvas.keyMoveVel =
+              Vector2Scale(Vector2Normalize(canvas.keyMoveVel), maxSpeed);
+        }
+        Vector2 delta = {canvas.keyMoveVel.x * dt / canvas.camera.zoom,
+                         canvas.keyMoveVel.y * dt / canvas.camera.zoom};
+        if (!canvas.keyMoveActive) {
+          SaveBackup(canvas);
+          canvas.keyMoveActive = true;
+        }
+        for (int idx : canvas.selectedIndices) {
+          if (idx >= 0 && idx < (int)canvas.elements.size())
+            MoveElement(canvas.elements[idx], delta);
+        }
+      } else {
+        canvas.keyMoveVel = {0.0f, 0.0f};
+        canvas.keyMoveActive = false;
+      }
+    } else {
+      canvas.keyMoveVel = {0.0f, 0.0f};
+      canvas.keyMoveActive = false;
+    }
     const int statusH = canvas.showStatusBar ? 32 : 0;
     const int statusY = GetScreenHeight() - statusH;
     const bool mouseOnStatusBar =
@@ -2947,8 +3114,8 @@ int main() {
     }
 
     if (canvas.mode == MOVE_MODE) {
-      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
-        Vector2 delta = GetMouseDelta();
+      if (mouseLeftDown && !mouseOnStatusBar) {
+        Vector2 delta = mouseDelta;
         canvas.camera.target.x -= delta.x / canvas.camera.zoom;
         canvas.camera.target.y -= delta.y / canvas.camera.zoom;
       }
@@ -3036,7 +3203,7 @@ int main() {
         canvas.isTypingNumber = false;
       }
 
-      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
+      if (mouseLeftPressed && !mouseOnStatusBar) {
         canvas.startPoint = mouseWorld;
         canvas.currentMouse = mouseWorld;
         canvas.isDragging = true;
@@ -3096,15 +3263,16 @@ int main() {
         canvas.hasMoved = false;
       }
 
-      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
+      if (mouseLeftDown && canvas.isDragging) {
         Vector2 prevMouse = canvas.currentMouse;
-        canvas.currentMouse = GetScreenToWorld2D(GetMousePosition(), canvas.camera);
+        canvas.currentMouse = mouseWorld;
         Vector2 delta = Vector2Subtract(canvas.currentMouse, prevMouse);
         if (canvas.isBoxSelecting) {
           float activationDist = cfg.selectionBoxActivationPx / canvas.camera.zoom;
           if (!canvas.boxSelectActive &&
-              Vector2Distance(canvas.startPoint, canvas.currentMouse) >=
-                  activationDist) {
+              (Vector2Distance(canvas.startPoint, canvas.currentMouse) >=
+                   activationDist ||
+               Vector2Length(mouseDelta) > 0.0f)) {
             canvas.boxSelectActive = true;
           }
           if (canvas.boxSelectActive) {
@@ -3123,16 +3291,20 @@ int main() {
               }
             }
           }
-        } else if (!canvas.selectedIndices.empty() &&
-                   (delta.x != 0 || delta.y != 0)) {
-          canvas.hasMoved = true;
-          for (int idx : canvas.selectedIndices) {
-            if (idx >= 0 && idx < (int)canvas.elements.size())
-              MoveElement(canvas.elements[idx], delta);
+        } else {
+          Vector2 dragDelta = {mouseDelta.x / canvas.camera.zoom,
+                               mouseDelta.y / canvas.camera.zoom};
+          if (!canvas.selectedIndices.empty() &&
+              (dragDelta.x != 0 || dragDelta.y != 0)) {
+            canvas.hasMoved = true;
+            for (int idx : canvas.selectedIndices) {
+              if (idx >= 0 && idx < (int)canvas.elements.size())
+                MoveElement(canvas.elements[idx], dragDelta);
+            }
           }
         }
       }
-      if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
+      if (mouseLeftReleased) {
         if (!canvas.isBoxSelecting && !canvas.hasMoved &&
             !canvas.undoStack.empty())
           canvas.undoStack.pop_back();
@@ -3153,7 +3325,7 @@ int main() {
         return -1;
       };
 
-      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
+      if (mouseLeftPressed && !mouseOnStatusBar) {
         canvas.transformActive = false;
         canvas.transformHandle = 0;
         canvas.transformIndex = -1;
@@ -3288,7 +3460,7 @@ int main() {
         }
       }
 
-      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && canvas.transformActive) {
+      if (mouseLeftDown && canvas.transformActive) {
         int idx = canvas.transformIndex;
         if (idx >= 0 && idx < (int)canvas.elements.size()) {
           Element base = canvas.transformStart;
@@ -3333,13 +3505,13 @@ int main() {
         }
       }
 
-      if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON)) {
+      if (mouseLeftReleased) {
         canvas.transformActive = false;
         canvas.transformHandle = 0;
         canvas.transformIndex = -1;
       }
     } else if (canvas.mode == ERASER_MODE) {
-      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
+      if (mouseLeftDown && !mouseOnStatusBar) {
         Vector2 m = mouseWorld;
         for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
           Rectangle b = canvas.elements[i].GetBounds();
@@ -3353,7 +3525,7 @@ int main() {
         }
       }
     } else if (canvas.mode == TEXT_MODE) {
-      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
+      if (mouseLeftPressed && !mouseOnStatusBar) {
         Vector2 m = mouseWorld;
         int hitIndex = -1;
         for (int i = (int)canvas.elements.size() - 1; i >= 0; i--) {
@@ -3408,8 +3580,12 @@ int main() {
         int ch = GetCharPressed();
         while (ch > 0) {
           if (ch >= 32 && ch < 127) {
-            canvas.textBuffer.push_back((char)ch);
-            changed = true;
+            bool suppressClickComma =
+                canvas.antiMouseMode && ch == ',' && mouseLeftDown;
+            if (!suppressClickComma) {
+              canvas.textBuffer.push_back((char)ch);
+              changed = true;
+            }
           }
           ch = GetCharPressed();
         }
@@ -3439,7 +3615,7 @@ int main() {
         }
       }
     } else {
-      if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && !mouseOnStatusBar) {
+      if (mouseLeftPressed && !mouseOnStatusBar) {
         canvas.startPoint = mouseWorld;
         canvas.currentMouse = canvas.startPoint;
         canvas.isDragging = true;
@@ -3448,14 +3624,14 @@ int main() {
           canvas.currentPath.push_back(canvas.startPoint);
         }
       }
-      if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
-        canvas.currentMouse = GetScreenToWorld2D(GetMousePosition(), canvas.camera);
+      if (mouseLeftDown && canvas.isDragging) {
+        canvas.currentMouse = mouseWorld;
         if (canvas.mode == PEN_MODE &&
             Vector2Distance(canvas.currentPath.back(), canvas.currentMouse) >
                 cfg.penSampleDistance)
           canvas.currentPath.push_back(canvas.currentMouse);
       }
-      if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON) && canvas.isDragging) {
+      if (mouseLeftReleased && canvas.isDragging) {
         canvas.isDragging = false;
         if (canvas.mode == PEN_MODE ||
             Vector2Distance(canvas.startPoint, canvas.currentMouse) > 1.0f) {
@@ -3639,11 +3815,10 @@ int main() {
         DrawRectangleRec(box, Fade(grubYellow, 0.2f));
         DrawRectangleLinesEx(box, 1, grubYellow);
       } else if (canvas.mode != SELECTION_MODE && canvas.mode != ERASER_MODE) {
-        Vector2 m = GetScreenToWorld2D(GetMousePosition(), canvas.camera);
         Element preview;
         preview.type = canvas.mode;
         preview.start = canvas.startPoint;
-        preview.end = m;
+        preview.end = mouseWorld;
         preview.strokeWidth = canvas.strokeWidth;
         preview.color = Fade(canvas.drawColor, 0.5f);
         if (canvas.mode == PEN_MODE)
@@ -3652,8 +3827,7 @@ int main() {
       }
     }
     if (canvas.mode == ERASER_MODE)
-      DrawCircleLinesV(GetScreenToWorld2D(GetMousePosition(), canvas.camera), 10,
-                       ORANGE);
+      DrawCircleLinesV(mouseWorld, 10, ORANGE);
     if (canvas.mode == TEXT_MODE && canvas.isTextEditing) {
       DrawTextEx(canvas.font, canvas.textBuffer.c_str(), canvas.textPos,
                  canvas.editingTextSize, 2, Fade(canvas.editingColor, 0.7f));
@@ -3726,7 +3900,18 @@ int main() {
       DrawTextEx(canvas.font, line.c_str(), {10, (float)y + 6.0f}, 18, 1.5f,
                  canvas.statusValueColor);
     }
+
+    if (canvas.antiMouseMode) {
+      float size = 8.0f;
+      float thick = 2.0f;
+      Color cursorColor = {220, 70, 70, 220};
+      DrawLineEx({mouseScreen.x - size, mouseScreen.y},
+                 {mouseScreen.x + size, mouseScreen.y}, thick, cursorColor);
+      DrawLineEx({mouseScreen.x, mouseScreen.y - size},
+                 {mouseScreen.x, mouseScreen.y + size}, thick, cursorColor);
+    }
     EndDrawing();
+    canvas.lastMouseScreen = mouseScreen;
   }
   if (canvas.ownsFont)
     UnloadFont(canvas.font);
