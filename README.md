@@ -54,7 +54,9 @@ Built with C++ and Raylib.
 | `+` | Zoom in | `]` | Bring forward |
 | `_` | Zoom out | `=` | Increase stroke width |
 | `esc` | Stop/Quit/Exit | `-` | Decrease stroke width |
-| `tab` | hide/show status bar | 
+| `tab` | hide/show status bar | `[` | Send backwards |
+| `]`  | Send forwareds |
+
 
 ### Selection Mode (Active)
 
