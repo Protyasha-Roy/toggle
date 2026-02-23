@@ -8,6 +8,7 @@ Built with C++ and Raylib.
 3. Run ./toggle 
 
 ## Features summary
+- Move cursor and elements without using the mouse on anti-mouse mode
 - Freehand pen drawing.
 - Lines (solid, dotted, arrow).
 - Circles (solid, dotted).
