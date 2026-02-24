@@ -3,7 +3,7 @@ Built with C++ and Raylib.
 
 1. Clone the repo
 
-2. Compile with 'g++ main.cpp -lraylib -lGL -lm -lpthread -ldl -lrt -o toggle' [install necessary dependencies]
+2. Compile with `g++ main.cpp -lraylib -lGL -lm -lpthread -ldl -lrt -o toggle` [install necessary dependencies]
 
 3. Run ./toggle 
 
@@ -13,6 +13,7 @@ Built with C++ and Raylib.
 - Lines (solid, dotted, arrow).
 - Circles (solid, dotted).
 - Rectangles (solid, dotted).
+- Triangles (equilateral).
 - Text tool with in‑place editing.
 - Eraser tool.
 - Selection, multi‑selection, box select.
@@ -38,12 +39,12 @@ Built with C++ and Raylib.
 | --- | --- | --- | --- |
 | `s` | Selection mode | `p` | Pen/Pencil mode |
 | `m` | Move mode | `e` | Eraser mode |
-| `t` | Text mode | `shift+R` | Resize/Rotate mode |
+| `t` | Triangle mode | `shift+R` | Resize/Rotate mode |
 | `l` | Straight line | `dl` | Dotted line |
 | `al` | Arrow line | `c` | Circle |
 | `dc` | Dotted circle | `r` | Rectangle |
-| `dr` | Dotted rectangle | `f` | Toggle numbered hints |
-| `o` | anti-mouse mode | 
+| `dr` | Dotted rectangle | `T` | Text mode |
+| `f` | Toggle numbered hints | `o` | anti-mouse mode |
 
 
 ### Anti-mouse mode
