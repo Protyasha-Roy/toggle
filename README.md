@@ -13,7 +13,7 @@ Built with C++ and Raylib.
 - Lines (solid, dotted, arrow).
 - Circles (solid, dotted).
 - Rectangles (solid, dotted).
-- Triangles (equilateral).
+- Triangles (equilateral, dotted).
 - Text tool with in‑place editing.
 - Eraser tool.
 - Selection, multi‑selection, box select.
@@ -43,8 +43,9 @@ Built with C++ and Raylib.
 | `l` | Straight line | `dl` | Dotted line |
 | `al` | Arrow line | `c` | Circle |
 | `dc` | Dotted circle | `r` | Rectangle |
-| `dr` | Dotted rectangle | `T` | Text mode |
-| `f` | Toggle numbered hints | `o` | anti-mouse mode |
+| `dr` | Dotted rectangle | `dt` | Dotted triangle |
+| `T` | Text mode | `f` | Toggle numbered hints |
+| `o` | anti-mouse mode |  |  |
 
 
 ### Anti-mouse mode

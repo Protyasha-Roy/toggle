@@ -32,6 +32,7 @@ enum Mode {
   PEN_MODE,
   GROUP_MODE,
   TRIANGLE_MODE,
+  DOTTEDTRIANGLE_MODE,
 };
 
 enum BackgroundType { BG_BLANK, BG_GRID, BG_DOTTED };
@@ -452,6 +453,22 @@ bool IsPointInSelectionVisual(const Element &el, Vector2 p) {
     return PointInQuad(p, c1, c2, c3, c4);
   }
 
+  if (el.type == TRIANGLE_MODE || el.type == DOTTEDTRIANGLE_MODE) {
+    Vector2 localP = p;
+    if (el.rotation != 0.0f) {
+      Vector2 center = ElementCenterLocal(el);
+      localP = RotatePoint(p, center, -el.rotation);
+    }
+    Vector2 apex, left, right;
+    GetTriangleVerticesLocal(el, apex, left, right);
+    float t = max(0.5f, el.strokeWidth * 0.5f + rectPad);
+    if (PointInTriangle(localP, apex, left, right))
+      return true;
+    return CheckCollisionPointLine(localP, apex, left, t) ||
+           CheckCollisionPointLine(localP, left, right, t) ||
+           CheckCollisionPointLine(localP, right, apex, t);
+  }
+
   Rectangle b = el.GetLocalBounds();
   Rectangle expanded = {b.x - rectPad, b.y - rectPad, b.width + 2 * rectPad,
                         b.height + 2 * rectPad};
@@ -526,7 +543,7 @@ bool ElementIntersectsRect(const Element &el, Rectangle r, float tol) {
     return false;
   }
 
-  if (el.type == TRIANGLE_MODE) {
+  if (el.type == TRIANGLE_MODE || el.type == DOTTEDTRIANGLE_MODE) {
     Vector2 apex, left, right;
     GetTriangleVerticesLocal(el, apex, left, right);
     if (el.rotation != 0.0f) {
@@ -563,7 +580,8 @@ bool ElementIntersectsRect(const Element &el, Rectangle r, float tol) {
   Vector2 bl = {b.x, b.y + b.height};
   if (el.rotation != 0.0f &&
       (el.type == RECTANGLE_MODE || el.type == DOTTEDRECT_MODE ||
-       el.type == TEXT_MODE || el.type == TRIANGLE_MODE)) {
+       el.type == TEXT_MODE || el.type == TRIANGLE_MODE ||
+       el.type == DOTTEDTRIANGLE_MODE)) {
     tl = RotatePoint(tl, center, el.rotation);
     tr = RotatePoint(tr, center, el.rotation);
     br = RotatePoint(br, center, el.rotation);
@@ -631,7 +649,7 @@ bool IsPointOnElement(const Element &el, Vector2 p, float tolerance) {
            CheckCollisionPointLine(localP, c, d, t) ||
            CheckCollisionPointLine(localP, d, a, t);
   }
-  if (el.type == TRIANGLE_MODE) {
+  if (el.type == TRIANGLE_MODE || el.type == DOTTEDTRIANGLE_MODE) {
     Vector2 apex, left, right;
     GetTriangleVerticesLocal(el, apex, left, right);
     float t = el.strokeWidth * 0.5f + tol;
@@ -861,7 +879,7 @@ void DrawElement(const Element &el, const Font &font, float textSize) {
       DrawDashedLine(c3, c4, el.strokeWidth, el.color);
       DrawDashedLine(c4, c1, el.strokeWidth, el.color);
     }
-  } else if (el.type == TRIANGLE_MODE) {
+  } else if (el.type == TRIANGLE_MODE || el.type == DOTTEDTRIANGLE_MODE) {
     Vector2 apex, left, right;
     GetTriangleVerticesLocal(el, apex, left, right);
     if (el.rotation != 0.0f) {
@@ -870,9 +888,15 @@ void DrawElement(const Element &el, const Font &font, float textSize) {
       left = RotatePoint(left, center, el.rotation);
       right = RotatePoint(right, center, el.rotation);
     }
-    DrawLineEx(apex, left, el.strokeWidth, el.color);
-    DrawLineEx(left, right, el.strokeWidth, el.color);
-    DrawLineEx(right, apex, el.strokeWidth, el.color);
+    if (el.type == DOTTEDTRIANGLE_MODE) {
+      DrawDashedLine(apex, left, el.strokeWidth, el.color);
+      DrawDashedLine(left, right, el.strokeWidth, el.color);
+      DrawDashedLine(right, apex, el.strokeWidth, el.color);
+    } else {
+      DrawLineEx(apex, left, el.strokeWidth, el.color);
+      DrawLineEx(left, right, el.strokeWidth, el.color);
+      DrawLineEx(right, apex, el.strokeWidth, el.color);
+    }
   } else if (el.type == PEN_MODE) {
     int pointCount = (int)el.path.size();
 
@@ -1886,6 +1910,9 @@ void SetMode(Canvas &canvas, const AppConfig &cfg, Mode mode) {
   } else if (mode == TRIANGLE_MODE) {
     canvas.modeText = "TRIANGLE";
     canvas.modeColor = cfg.modeTriangle;
+  } else if (mode == DOTTEDTRIANGLE_MODE) {
+    canvas.modeText = "DOTTED TRIANGLE";
+    canvas.modeColor = cfg.modeTriangle;
   } else if (mode == TEXT_MODE) {
     canvas.modeText = "TEXT";
     canvas.modeColor = cfg.modeTextColor;
@@ -2148,7 +2175,7 @@ void WriteSvgElement(ofstream &out, const Element &el, const string &fontFamily,
     if (el.type == DOTTEDCIRCLE_MODE)
       out << " stroke-dasharray=\"8,6\"";
     out << " />\n";
-  } else if (el.type == TRIANGLE_MODE) {
+  } else if (el.type == TRIANGLE_MODE || el.type == DOTTEDTRIANGLE_MODE) {
     Vector2 apex, left, right;
     GetTriangleVerticesLocal(el, apex, left, right);
     if (el.rotation != 0.0f) {
@@ -2163,7 +2190,10 @@ void WriteSvgElement(ofstream &out, const Element &el, const string &fontFamily,
     out << "<polygon points=\"" << a.x << "," << a.y << " " << b.x << ","
         << b.y << " " << c.x << "," << c.y << "\" stroke=\"" << stroke
         << "\" stroke-width=\"" << scaledStroke
-        << "\" fill=\"none\" stroke-linejoin=\"round\" />\n";
+        << "\" fill=\"none\" stroke-linejoin=\"round\"";
+    if (el.type == DOTTEDTRIANGLE_MODE)
+      out << " stroke-dasharray=\"8,6\"";
+    out << " />\n";
   } else if (el.type == PEN_MODE) {
     if (el.path.size() >= 2) {
       out << "<polyline points=\"";
@@ -3104,7 +3134,12 @@ int main() {
     }
     if (!canvas.isTextEditing &&
         IsActionPressed(cfg, "mode_triangle", shiftDown, ctrlDown, altDown)) {
-      SetMode(canvas, cfg, TRIANGLE_MODE);
+      int dottedPrefixKey = PrimaryKeyForAction(cfg, "prefix_dotted");
+      if (canvas.lastKey == dottedPrefixKey) {
+        SetMode(canvas, cfg, DOTTEDTRIANGLE_MODE);
+      } else {
+        SetMode(canvas, cfg, TRIANGLE_MODE);
+      }
     }
     if (!canvas.isTextEditing &&
         IsActionPressed(cfg, "mode_eraser", shiftDown, ctrlDown, altDown)) {
@@ -3763,7 +3798,7 @@ int main() {
       }
       if (mouseLeftDown && canvas.isDragging) {
         canvas.currentMouse = mouseWorld;
-        if (canvas.mode == TRIANGLE_MODE)
+        if (canvas.mode == TRIANGLE_MODE || canvas.mode == DOTTEDTRIANGLE_MODE)
           canvas.currentMouse =
               ConstrainTriangleEnd(cfg, canvas.startPoint, canvas.currentMouse);
         if (canvas.mode == PEN_MODE &&
@@ -3780,7 +3815,7 @@ int main() {
           newEl.type = canvas.mode;
           newEl.start = canvas.startPoint;
           Vector2 endPoint = canvas.currentMouse;
-          if (canvas.mode == TRIANGLE_MODE)
+          if (canvas.mode == TRIANGLE_MODE || canvas.mode == DOTTEDTRIANGLE_MODE)
             endPoint = ConstrainTriangleEnd(cfg, canvas.startPoint, endPoint);
           newEl.end = endPoint;
           newEl.strokeWidth = canvas.strokeWidth;
@@ -3962,7 +3997,7 @@ int main() {
         preview.type = canvas.mode;
         preview.start = canvas.startPoint;
         preview.end = mouseWorld;
-        if (canvas.mode == TRIANGLE_MODE)
+        if (canvas.mode == TRIANGLE_MODE || canvas.mode == DOTTEDTRIANGLE_MODE)
           preview.end = ConstrainTriangleEnd(cfg, canvas.startPoint, preview.end);
         preview.strokeWidth = canvas.strokeWidth;
         preview.color = Fade(canvas.drawColor, 0.5f);
