@@ -3616,15 +3616,28 @@ int main() {
             Vector2 localMouse = mouseWorld;
             if (base.rotation != 0.0f)
               localMouse = RotatePoint(mouseWorld, center, -base.rotation);
-            Rectangle b = base.GetLocalBounds();
-            float halfW = max(1.0f, b.width * 0.5f);
-            float halfH = max(1.0f, b.height * 0.5f);
-            float sx = fabsf(localMouse.x - center.x) / halfW;
-            float sy = fabsf(localMouse.y - center.y) / halfH;
-            sx = max(0.05f, sx);
-            sy = max(0.05f, sy);
             el = base;
-            ScaleElementGeometry(el, center, sx, sy, canvas.font, canvas.textSize);
+            Rectangle b = base.GetLocalBounds();
+            float minSize = 1.0f;
+            float x0 = b.x;
+            float y0 = b.y;
+            float x1 = b.x + b.width;
+            float y1 = b.y + b.height;
+
+            if (canvas.transformHandle == 3 || canvas.transformHandle == 6) {
+              x0 = min(localMouse.x, x1 - minSize);
+            } else {
+              x1 = max(localMouse.x, x0 + minSize);
+            }
+
+            if (canvas.transformHandle == 3 || canvas.transformHandle == 4) {
+              y0 = min(localMouse.y, y1 - minSize);
+            } else {
+              y1 = max(localMouse.y, y0 + minSize);
+            }
+
+            el.start = {min(x0, x1), min(y0, y1)};
+            el.end = {max(x0, x1), max(y0, y1)};
           }
         }
       }
