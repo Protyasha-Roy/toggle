@@ -12,6 +12,7 @@ Built with C++ and Raylib.
 - Freehand pen drawing.
 - Lines (solid, dotted, arrow).
 - Circles (solid, dotted).
+- Graph mode
 - Rectangles (solid, dotted).
 - Triangles (equilateral, dotted).
 - Text tool with in‑place editing.
@@ -45,7 +46,7 @@ Built with C++ and Raylib.
 | `dc` | Dotted circle | `r` | Rectangle |
 | `dr` | Dotted rectangle | `dt` | Dotted triangle |
 | `T` | Text mode | `f` | Toggle numbered hints |
-| `o` | anti-mouse mode |  |  |
+| `o` | anti-mouse mode | `g` | Graph mode | 
 
 
 ### Anti-mouse mode

@@ -35,7 +35,7 @@ enum Mode {
   DOTTEDTRIANGLE_MODE,
 };
 
-enum BackgroundType { BG_BLANK, BG_GRID, BG_DOTTED };
+enum BackgroundType { BG_BLANK, BG_GRID, BG_DOTTED, BG_GRAPH };
 enum ExportScope { EXPORT_ALL, EXPORT_SELECTED, EXPORT_FRAME };
 
 struct KeyBinding {
@@ -69,6 +69,11 @@ struct AppConfig {
   float minTextSize = 6.0f;
   float maxTextSize = 200.0f;
   float defaultGridWidth = 24.0f;
+  float defaultGraphUnit = 24.0f;
+  float defaultGraphMinorSpacing = 12.0f;
+  float defaultGraphLabelSize = 12.0f;
+  float defaultGraphLabelMinPx = 24.0f;
+  float defaultGraphLabelMaxPx = 72.0f;
   float minZoom = 0.1f;
   float maxZoom = 10.0f;
   float zoomStep = 0.1f;
@@ -91,6 +96,14 @@ struct AppConfig {
   Color darkTextureB = {27, 27, 27, 255};
   Color lightGridColor = {216, 203, 178, 80};
   Color darkGridColor = {52, 52, 52, 64};
+  Color lightGraphAxis = {90, 80, 64, 180};
+  Color darkGraphAxis = {200, 200, 210, 160};
+  Color lightGraphMajor = {180, 166, 142, 120};
+  Color darkGraphMajor = {90, 90, 100, 90};
+  Color lightGraphMinor = {216, 203, 178, 70};
+  Color darkGraphMinor = {52, 52, 52, 45};
+  Color lightGraphLabel = {42, 42, 42, 220};
+  Color darkGraphLabel = {228, 228, 239, 220};
   Color lightStatusBg = {239, 230, 211, 255};
   Color darkStatusBg = {34, 34, 34, 255};
   Color lightStatusLabel = {107, 95, 74, 255};
@@ -253,6 +266,15 @@ struct Canvas {
   Color drawColor = BLACK;
   BackgroundType bgType = BG_BLANK;
   float gridWidth = 24.0f;
+  float graphUnit = 24.0f;
+  float graphMinorSpacing = 12.0f;
+  float graphLabelSize = 12.0f;
+  float graphLabelMinPx = 60.0f;
+  float graphLabelMaxPx = 140.0f;
+  Color graphAxisColor = {0, 0, 0, 200};
+  Color graphMajorColor = {0, 0, 0, 120};
+  Color graphMinorColor = {0, 0, 0, 70};
+  Color graphLabelColor = {0, 0, 0, 220};
   string savePath;
   string fontFamilyPath = "IosevkaNerdFontMono-Regular.ttf";
   bool ownsFont = true;
@@ -1296,6 +1318,8 @@ string BackgroundTypeToString(BackgroundType t) {
     return "grid";
   if (t == BG_DOTTED)
     return "dotted";
+  if (t == BG_GRAPH)
+    return "graph";
   return "blank";
 }
 
@@ -1311,6 +1335,10 @@ bool ParseBackgroundType(const string &s, BackgroundType &out) {
   }
   if (v == "dotted") {
     out = BG_DOTTED;
+    return true;
+  }
+  if (v == "graph") {
+    out = BG_GRAPH;
     return true;
   }
   return false;
@@ -1333,6 +1361,47 @@ bool ParseIntValue(const string &s, int &value) {
     return false;
   value = (int)v;
   return true;
+}
+
+string FormatGraphNumber(float v) {
+  int rounded = (int)roundf(v);
+  if (rounded == 0)
+    return "0";
+  return to_string(rounded);
+}
+
+float ChooseGraphStepUnits(float unit, float zoom, float minPx, float maxPx) {
+  float safeUnit = max(0.0001f, unit);
+  float safeZoom = max(0.0001f, zoom);
+  float lo = min(minPx, maxPx);
+  float hi = max(minPx, maxPx);
+  float targetPx = lo;
+  float targetUnits = targetPx / (safeUnit * safeZoom);
+  if (targetUnits <= 0.0f)
+    targetUnits = 1.0f;
+  int expBase = (int)floor(log10f(targetUnits));
+  float best = 0.0f;
+  float bestScore = numeric_limits<float>::max();
+  for (int exp = expBase - 4; exp <= expBase + 4; ++exp) {
+    float base = powf(10.0f, (float)exp);
+    for (float mult : {1.0f, 2.0f, 5.0f}) {
+      float step = mult * base;
+      float px = step * safeUnit * safeZoom;
+      float penalty = 0.0f;
+      if (px < lo)
+        penalty = (lo - px) * 2.0f;
+      else if (px > hi)
+        penalty = (px - hi) * 2.0f;
+      float score = penalty + fabsf(px - targetPx);
+      if (score < bestScore) {
+        bestScore = score;
+        best = step;
+      }
+    }
+  }
+  if (best <= 0.0f)
+    best = 1.0f;
+  return best;
 }
 
 bool ParseBool(const string &s, bool &value) {
@@ -1508,6 +1577,7 @@ void SetDefaultKeymap(AppConfig &cfg) {
   AddDefaultBinding(cfg, "mode_text", "Shift+T");
   AddDefaultBinding(cfg, "group_toggle", "G");
   AddDefaultBinding(cfg, "toggle_tags", "F");
+  AddDefaultBinding(cfg, "graph_toggle", "G");
   AddDefaultBinding(cfg, "undo", "U|Ctrl+Z");
   AddDefaultBinding(cfg, "redo", "Shift+U|Ctrl+Y|Ctrl+Shift+Z");
   AddDefaultBinding(cfg, "delete_selection", "X");
@@ -1548,6 +1618,11 @@ void WriteDefaultConfig(const AppConfig &cfg) {
   out << "canvas.max_text_size=" << cfg.maxTextSize << "\n";
   out << "canvas.grid_width=" << cfg.defaultGridWidth << "\n";
   out << "canvas.type=" << BackgroundTypeToString(cfg.defaultBgType) << "\n";
+  out << "graph.unit=" << cfg.defaultGraphUnit << "\n";
+  out << "graph.minor_spacing=" << cfg.defaultGraphMinorSpacing << "\n";
+  out << "graph.label_size=" << cfg.defaultGraphLabelSize << "\n";
+  out << "graph.label_min_px=" << cfg.defaultGraphLabelMinPx << "\n";
+  out << "graph.label_max_px=" << cfg.defaultGraphLabelMaxPx << "\n";
   out << "canvas.draw_color=" << ColorToHex(cfg.defaultDrawColor) << "\n";
   out << "triangle.height_ratio=" << cfg.triangleHeightRatio << "\n";
   out << "zoom.min=" << cfg.minZoom << "\n";
@@ -1569,6 +1644,14 @@ void WriteDefaultConfig(const AppConfig &cfg) {
   out << "theme.dark.texture_b=" << ColorToHex(cfg.darkTextureB) << "\n";
   out << "theme.light.grid=" << ColorToHex(cfg.lightGridColor) << "\n";
   out << "theme.dark.grid=" << ColorToHex(cfg.darkGridColor) << "\n";
+  out << "graph.light.axis=" << ColorToHex(cfg.lightGraphAxis) << "\n";
+  out << "graph.dark.axis=" << ColorToHex(cfg.darkGraphAxis) << "\n";
+  out << "graph.light.major=" << ColorToHex(cfg.lightGraphMajor) << "\n";
+  out << "graph.dark.major=" << ColorToHex(cfg.darkGraphMajor) << "\n";
+  out << "graph.light.minor=" << ColorToHex(cfg.lightGraphMinor) << "\n";
+  out << "graph.dark.minor=" << ColorToHex(cfg.darkGraphMinor) << "\n";
+  out << "graph.light.label=" << ColorToHex(cfg.lightGraphLabel) << "\n";
+  out << "graph.dark.label=" << ColorToHex(cfg.darkGraphLabel) << "\n";
   out << "status.light.bg=" << ColorToHex(cfg.lightStatusBg) << "\n";
   out << "status.dark.bg=" << ColorToHex(cfg.darkStatusBg) << "\n";
   out << "status.light.label=" << ColorToHex(cfg.lightStatusLabel) << "\n";
@@ -1674,6 +1757,16 @@ void LoadConfig(AppConfig &cfg) {
       cfg.defaultGridWidth = max(6.0f, fv);
     else if (key == "canvas.type")
       ParseBackgroundType(value, cfg.defaultBgType);
+    else if (key == "graph.unit" && ParsePositiveFloat(value, fv))
+      cfg.defaultGraphUnit = max(0.1f, fv);
+    else if (key == "graph.minor_spacing" && ParsePositiveFloat(value, fv))
+      cfg.defaultGraphMinorSpacing = max(0.1f, fv);
+    else if (key == "graph.label_size" && ParsePositiveFloat(value, fv))
+      cfg.defaultGraphLabelSize = max(6.0f, fv);
+    else if (key == "graph.label_min_px" && ParsePositiveFloat(value, fv))
+      cfg.defaultGraphLabelMinPx = max(10.0f, fv);
+    else if (key == "graph.label_max_px" && ParsePositiveFloat(value, fv))
+      cfg.defaultGraphLabelMaxPx = max(10.0f, fv);
     else if (key == "canvas.draw_color" && ParseHexColor(value, cv))
       cfg.defaultDrawColor = cv;
     else if (key == "triangle.height_ratio" && ParsePositiveFloat(value, fv))
@@ -1717,6 +1810,22 @@ void LoadConfig(AppConfig &cfg) {
       cfg.lightGridColor = cv;
     else if (key == "theme.dark.grid" && ParseHexColor(value, cv))
       cfg.darkGridColor = cv;
+    else if (key == "graph.light.axis" && ParseHexColor(value, cv))
+      cfg.lightGraphAxis = cv;
+    else if (key == "graph.dark.axis" && ParseHexColor(value, cv))
+      cfg.darkGraphAxis = cv;
+    else if (key == "graph.light.major" && ParseHexColor(value, cv))
+      cfg.lightGraphMajor = cv;
+    else if (key == "graph.dark.major" && ParseHexColor(value, cv))
+      cfg.darkGraphMajor = cv;
+    else if (key == "graph.light.minor" && ParseHexColor(value, cv))
+      cfg.lightGraphMinor = cv;
+    else if (key == "graph.dark.minor" && ParseHexColor(value, cv))
+      cfg.darkGraphMinor = cv;
+    else if (key == "graph.light.label" && ParseHexColor(value, cv))
+      cfg.lightGraphLabel = cv;
+    else if (key == "graph.dark.label" && ParseHexColor(value, cv))
+      cfg.darkGraphLabel = cv;
     else if (key == "status.light.bg" && ParseHexColor(value, cv))
       cfg.lightStatusBg = cv;
     else if (key == "status.dark.bg" && ParseHexColor(value, cv))
@@ -1757,6 +1866,8 @@ void LoadConfig(AppConfig &cfg) {
   cfg.maxTextSize = max(cfg.minTextSize, cfg.maxTextSize);
   cfg.defaultTextSize =
       min(cfg.maxTextSize, max(cfg.minTextSize, cfg.defaultTextSize));
+  if (cfg.defaultGraphLabelMaxPx < cfg.defaultGraphLabelMinPx)
+    cfg.defaultGraphLabelMaxPx = cfg.defaultGraphLabelMinPx;
   if (cfg.defaultSaveDir.empty())
     cfg.defaultSaveDir = DefaultDownloadsDir();
   if (cfg.defaultExportDir.empty())
@@ -1824,6 +1935,10 @@ void SetTheme(Canvas &canvas, const AppConfig &cfg, bool dark) {
     canvas.textureColorA = cfg.darkTextureA;
     canvas.textureColorB = cfg.darkTextureB;
     canvas.gridColor = cfg.darkGridColor;
+    canvas.graphAxisColor = cfg.darkGraphAxis;
+    canvas.graphMajorColor = cfg.darkGraphMajor;
+    canvas.graphMinorColor = cfg.darkGraphMinor;
+    canvas.graphLabelColor = cfg.darkGraphLabel;
     canvas.statusBarBg = cfg.darkStatusBg;
     canvas.statusBarBg.a = 255;
     canvas.statusLabelColor = cfg.darkStatusLabel;
@@ -1835,6 +1950,10 @@ void SetTheme(Canvas &canvas, const AppConfig &cfg, bool dark) {
     canvas.textureColorA = cfg.lightTextureA;
     canvas.textureColorB = cfg.lightTextureB;
     canvas.gridColor = cfg.lightGridColor;
+    canvas.graphAxisColor = cfg.lightGraphAxis;
+    canvas.graphMajorColor = cfg.lightGraphMajor;
+    canvas.graphMinorColor = cfg.lightGraphMinor;
+    canvas.graphLabelColor = cfg.lightGraphLabel;
     canvas.statusBarBg = cfg.lightStatusBg;
     canvas.statusBarBg.a = 255;
     canvas.statusLabelColor = cfg.lightStatusLabel;
@@ -1871,6 +1990,128 @@ void DrawBackgroundPattern(const Canvas &canvas) {
         DrawCircleV({x, y}, 1.4f, lineColor);
       }
     }
+  } else if (canvas.bgType == BG_GRAPH) {
+    float unit = max(0.0001f, canvas.graphUnit);
+    float minorSpacing = max(0.0001f, canvas.graphMinorSpacing);
+    float majorUnitsRaw = ChooseGraphStepUnits(unit, canvas.camera.zoom,
+                                               canvas.graphLabelMinPx,
+                                               canvas.graphLabelMaxPx);
+    int majorUnits = max(1, (int)roundf(majorUnitsRaw));
+    float majorSpacing = max(minorSpacing, (float)majorUnits * unit);
+
+    float minorPx = minorSpacing * canvas.camera.zoom;
+    if (minorPx >= 4.0f) {
+      float minorStartX = floorf(left / minorSpacing) * minorSpacing;
+      float minorStartY = floorf(top / minorSpacing) * minorSpacing;
+      for (float x = minorStartX; x <= right + minorSpacing; x += minorSpacing)
+        DrawLineV({x, top - minorSpacing}, {x, bottom + minorSpacing},
+                  canvas.graphMinorColor);
+      for (float y = minorStartY; y <= bottom + minorSpacing; y += minorSpacing)
+        DrawLineV({left - minorSpacing, y}, {right + minorSpacing, y},
+                  canvas.graphMinorColor);
+    }
+
+    float majorStartX = floorf(left / majorSpacing) * majorSpacing;
+    float majorStartY = floorf(top / majorSpacing) * majorSpacing;
+    for (float x = majorStartX; x <= right + majorSpacing; x += majorSpacing)
+      DrawLineV({x, top - majorSpacing}, {x, bottom + majorSpacing},
+                canvas.graphMajorColor);
+    for (float y = majorStartY; y <= bottom + majorSpacing; y += majorSpacing)
+      DrawLineV({left - majorSpacing, y}, {right + majorSpacing, y},
+                canvas.graphMajorColor);
+
+    bool axisXVisible = (0.0f >= left && 0.0f <= right);
+    bool axisYVisible = (0.0f >= top && 0.0f <= bottom);
+    if (axisXVisible) {
+      DrawLineEx({0.0f, top - majorSpacing}, {0.0f, bottom + majorSpacing},
+                 2.0f, canvas.graphAxisColor);
+    }
+    if (axisYVisible) {
+      DrawLineEx({left - majorSpacing, 0.0f}, {right + majorSpacing, 0.0f},
+                 2.0f, canvas.graphAxisColor);
+    }
+
+    float labelSize = max(6.0f, canvas.graphLabelSize);
+    float labelPad = 6.0f / max(0.0001f, canvas.camera.zoom);
+    float labelLineY =
+        axisYVisible ? 0.0f : (0.0f < top ? top + labelPad : bottom - labelPad);
+
+    float xLabelY = labelLineY + labelPad;
+    if (axisYVisible) {
+      float below = 0.0f + labelPad;
+      float above = 0.0f - labelPad - labelSize;
+      if (below + labelSize <= bottom)
+        xLabelY = below;
+      else
+        xLabelY = above;
+    } else {
+      xLabelY = (0.0f < top) ? (top + labelPad)
+                             : (bottom - labelPad - labelSize);
+    }
+    float minLabelY = top + labelPad;
+    float maxLabelY = bottom - labelPad - labelSize;
+    if (maxLabelY < minLabelY)
+      maxLabelY = minLabelY;
+    xLabelY = min(max(xLabelY, minLabelY), maxLabelY);
+
+    int startXi = (int)floorf(left / majorSpacing);
+    int endXi = (int)ceilf(right / majorSpacing);
+    for (int i = startXi; i <= endXi; ++i) {
+      float x = (float)i * majorSpacing;
+      int value = i * majorUnits;
+      if (value == 0)
+        continue;
+      string label = to_string(value);
+      Vector2 size = MeasureTextEx(canvas.font, label.c_str(), labelSize, 1.0f);
+      DrawTextEx(canvas.font, label.c_str(),
+                 {x - size.x * 0.5f, xLabelY}, labelSize, 1.0f,
+                 canvas.graphLabelColor);
+    }
+
+    int startYi = (int)floorf(top / majorSpacing);
+    int endYi = (int)ceilf(bottom / majorSpacing);
+    for (int i = startYi; i <= endYi; ++i) {
+      float y = (float)i * majorSpacing;
+      int value = -i * majorUnits;
+      if (value == 0)
+        continue;
+      string label = to_string(value);
+      Vector2 size = MeasureTextEx(canvas.font, label.c_str(), labelSize, 1.0f);
+      float yLabelX = 0.0f;
+      if (axisXVisible) {
+        yLabelX = 0.0f + labelPad;
+        if (yLabelX + size.x > right)
+          yLabelX = 0.0f - labelPad - size.x;
+      } else if (0.0f < left) {
+        yLabelX = left + labelPad;
+      } else {
+        yLabelX = right - labelPad - size.x;
+      }
+      float minLabelX = left + labelPad;
+      float maxLabelX = right - labelPad - size.x;
+      if (maxLabelX < minLabelX)
+        maxLabelX = minLabelX;
+      yLabelX = min(max(yLabelX, minLabelX), maxLabelX);
+      DrawTextEx(canvas.font, label.c_str(),
+                 {yLabelX, y - size.y * 0.5f}, labelSize, 1.0f,
+                 canvas.graphLabelColor);
+    }
+
+    Vector2 zeroSize = MeasureTextEx(canvas.font, "0", labelSize, 1.0f);
+    float zeroX = 0.0f - labelPad - zeroSize.x;
+    float zeroY = 0.0f + labelPad;
+    float minZeroX = left + labelPad;
+    float maxZeroX = right - labelPad - zeroSize.x;
+    float minZeroY = top + labelPad;
+    float maxZeroY = bottom - labelPad - labelSize;
+    if (maxZeroX < minZeroX)
+      maxZeroX = minZeroX;
+    if (maxZeroY < minZeroY)
+      maxZeroY = minZeroY;
+    zeroX = min(max(zeroX, minZeroX), maxZeroX);
+    zeroY = min(max(zeroY, minZeroY), maxZeroY);
+    DrawTextEx(canvas.font, "0", {zeroX, zeroY}, labelSize, 1.0f,
+               canvas.graphLabelColor);
   }
 }
 
@@ -2563,6 +2804,78 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
     SetStatus(canvas, cfg, "Grid spacing set");
     return;
   }
+  if (opLower == "graph") {
+    string v = args.empty() ? "toggle" : ToLower(args[0]);
+    if (v == "on" || v == "graph") {
+      canvas.bgType = BG_GRAPH;
+      canvas.camera.target = {0.0f, 0.0f};
+      SetStatus(canvas, cfg, "Graph mode on");
+    } else if (v == "off" || v == "blank") {
+      canvas.bgType = BG_BLANK;
+      SetStatus(canvas, cfg, "Graph mode off");
+    } else if (v == "toggle") {
+      if (canvas.bgType == BG_GRAPH) {
+        canvas.bgType = BG_BLANK;
+        SetStatus(canvas, cfg, "Graph mode off");
+      } else {
+        canvas.bgType = BG_GRAPH;
+        canvas.camera.target = {0.0f, 0.0f};
+        SetStatus(canvas, cfg, "Graph mode on");
+      }
+    } else {
+      SetStatus(canvas, cfg, "Usage: :graph on|off|toggle");
+    }
+    return;
+  }
+  if (opLower == "graphunit") {
+    float v = 0.0f;
+    if (args.empty() || !ParsePositiveFloat(args[0], v) || v < 0.1f) {
+      SetStatus(canvas, cfg, "Usage: :graphunit [>0]");
+      return;
+    }
+    canvas.graphUnit = v;
+    SetStatus(canvas, cfg, "Graph unit set");
+    return;
+  }
+  if (opLower == "graphminor") {
+    float v = 0.0f;
+    if (args.empty() || !ParsePositiveFloat(args[0], v) || v < 0.1f) {
+      SetStatus(canvas, cfg, "Usage: :graphminor [>0]");
+      return;
+    }
+    canvas.graphMinorSpacing = v;
+    SetStatus(canvas, cfg, "Graph minor spacing set");
+    return;
+  }
+  if (opLower == "graphlabel") {
+    float v = 0.0f;
+    if (args.empty() || !ParsePositiveFloat(args[0], v) || v < 6.0f) {
+      SetStatus(canvas, cfg, "Usage: :graphlabel [>=6]");
+      return;
+    }
+    canvas.graphLabelSize = v;
+    SetStatus(canvas, cfg, "Graph label size set");
+    return;
+  }
+  if (opLower == "graphspacing") {
+    float minPx = 0.0f;
+    float maxPx = 0.0f;
+    if (args.empty() || !ParsePositiveFloat(args[0], minPx) || minPx < 10.0f) {
+      SetStatus(canvas, cfg, "Usage: :graphspacing min_px max_px");
+      return;
+    }
+    if (args.size() >= 2 && ParsePositiveFloat(args[1], maxPx)) {
+      maxPx = max(10.0f, maxPx);
+    } else {
+      maxPx = minPx;
+    }
+    if (maxPx < minPx)
+      maxPx = minPx;
+    canvas.graphLabelMinPx = minPx;
+    canvas.graphLabelMaxPx = maxPx;
+    SetStatus(canvas, cfg, "Graph label spacing set");
+    return;
+  }
   if (opLower == "type") {
     string v = args.empty() ? "" : ToLower(args[0]);
     if (v == "blank") {
@@ -2574,8 +2887,12 @@ void ExecuteCommand(Canvas &canvas, AppConfig &cfg, string command) {
     } else if (v == "dotted") {
       canvas.bgType = BG_DOTTED;
       SetStatus(canvas, cfg, "Canvas type: dotted");
+    } else if (v == "graph") {
+      canvas.bgType = BG_GRAPH;
+      canvas.camera.target = {0.0f, 0.0f};
+      SetStatus(canvas, cfg, "Canvas type: graph");
     } else {
-      SetStatus(canvas, cfg, "Usage: :type blank|grid|dotted");
+      SetStatus(canvas, cfg, "Usage: :type blank|grid|dotted|graph");
     }
     return;
   }
@@ -2756,6 +3073,11 @@ int main() {
   canvas.strokeWidth = cfg.defaultStrokeWidth;
   canvas.textSize = cfg.defaultTextSize;
   canvas.gridWidth = cfg.defaultGridWidth;
+  canvas.graphUnit = cfg.defaultGraphUnit;
+  canvas.graphMinorSpacing = cfg.defaultGraphMinorSpacing;
+  canvas.graphLabelSize = cfg.defaultGraphLabelSize;
+  canvas.graphLabelMinPx = cfg.defaultGraphLabelMinPx;
+  canvas.graphLabelMaxPx = cfg.defaultGraphLabelMaxPx;
   canvas.drawColor = cfg.defaultDrawColor;
   canvas.showTags = cfg.defaultShowTags;
   canvas.bgType = cfg.defaultBgType;
@@ -2775,6 +3097,10 @@ int main() {
     bool shiftDown = IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT);
     bool ctrlDown = IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL);
     bool altDown = IsKeyDown(KEY_LEFT_ALT) || IsKeyDown(KEY_RIGHT_ALT);
+    if (canvas.bgType == BG_GRAPH) {
+      canvas.camera.offset = {(float)GetScreenWidth() * 0.5f,
+                              (float)GetScreenHeight() * 0.5f};
+    }
     if (!canvas.isTextEditing && !canvas.commandMode &&
         IsKeyPressed(KEY_O)) {
       canvas.antiMouseMode = !canvas.antiMouseMode;
@@ -3154,10 +3480,14 @@ int main() {
       }
     }
 
+    bool graphTogglePressed =
+        !canvas.isTextEditing &&
+        IsActionPressed(cfg, "graph_toggle", shiftDown, ctrlDown, altDown);
     bool groupTogglePressed =
         IsActionPressed(cfg, "group_toggle", shiftDown, ctrlDown, altDown) ||
         (shiftDown &&
          IsActionPressed(cfg, "group_toggle", false, ctrlDown, altDown));
+    bool groupHandled = false;
     if (!canvas.isTextEditing && groupTogglePressed) {
       if (shiftDown) {
         if (!canvas.selectedIndices.empty()) {
@@ -3172,6 +3502,7 @@ int main() {
               for (auto &child : g.children) {
                 canvas.elements.push_back(child);
               }
+              groupHandled = true;
             }
           }
           canvas.selectedIndices.clear();
@@ -3200,6 +3531,17 @@ int main() {
 
         canvas.elements.push_back(group);
         canvas.selectedIndices = {(int)canvas.elements.size() - 1};
+        groupHandled = true;
+      }
+    }
+    if (!canvas.isTextEditing && graphTogglePressed && !groupHandled) {
+      if (canvas.bgType == BG_GRAPH) {
+        canvas.bgType = BG_BLANK;
+        SetStatus(canvas, cfg, "Graph mode off");
+      } else {
+        canvas.bgType = BG_GRAPH;
+        canvas.camera.target = {0.0f, 0.0f};
+        SetStatus(canvas, cfg, "Graph mode on");
       }
     }
 
